@@ -31,6 +31,10 @@ function getConfig(): WidgetConfig {
         position: (script.dataset.position as 'bottom-right' | 'bottom-left') || 'bottom-right',
         primaryColor: script.dataset.primaryColor || '#6366f1',
         welcomeMessage: script.dataset.welcomeMessage || 'Hi! How can I help you today?',
+        // Optional workspace ID for scoped retrieval and system prompts
+        workspaceId: script.dataset.workspaceId || undefined,
+        // Optional JSON context passed via `data-context` on the script tag
+        context: script.dataset.context ? JSON.parse(script.dataset.context) : undefined,
     };
 }
 
@@ -41,6 +45,8 @@ export interface WidgetConfig {
     position: 'bottom-right' | 'bottom-left';
     primaryColor: string;
     welcomeMessage: string;
+    workspaceId?: string;
+    context?: Record<string, any>;
 }
 
 // Auto-initialize

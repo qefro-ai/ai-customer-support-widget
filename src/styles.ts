@@ -5,8 +5,8 @@
 import type { WidgetConfig } from './index';
 
 export function injectStyles(config: WidgetConfig): void {
-    const style = document.createElement('style');
-    style.textContent = `
+  const style = document.createElement('style');
+  style.textContent = `
     #ai-widget-container {
       --ai-primary: ${config.primaryColor};
       --ai-primary-dark: color-mix(in srgb, ${config.primaryColor} 85%, black);
@@ -31,6 +31,7 @@ export function injectStyles(config: WidgetConfig): void {
     }
 
     .ai-widget-trigger {
+      position: relative;
       width: 56px;
       height: 56px;
       border-radius: 50%;
@@ -48,6 +49,30 @@ export function injectStyles(config: WidgetConfig): void {
     .ai-widget-trigger:hover {
       transform: scale(1.05);
       box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+    }
+
+    .ai-widget-badge {
+      position: absolute;
+      top: -4px;
+      right: -4px;
+      min-width: 20px;
+      height: 20px;
+      background: #ef4444;
+      color: white;
+      font-size: 11px;
+      font-weight: 600;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0 6px;
+      box-shadow: 0 2px 8px rgba(239, 68, 68, 0.4);
+      animation: ai-badge-pulse 2s ease-in-out infinite;
+    }
+
+    @keyframes ai-badge-pulse {
+      0%, 100% { transform: scale(1); }
+      50% { transform: scale(1.1); }
     }
 
     #ai-widget-container.open .ai-widget-trigger {
@@ -91,6 +116,53 @@ export function injectStyles(config: WidgetConfig): void {
       color: white;
       font-weight: 600;
       font-size: 16px;
+    }
+
+    .ai-widget-header-actions {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .ai-widget-voice {
+      background: none;
+      border: none;
+      color: white;
+      cursor: pointer;
+      opacity: 0.7;
+      transition: opacity 0.2s, transform 0.2s;
+      padding: 6px;
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .ai-widget-voice:hover {
+      opacity: 1;
+      background: rgba(255, 255, 255, 0.1);
+    }
+
+    .ai-widget-voice[aria-pressed="true"] {
+      opacity: 1;
+    }
+
+    .ai-widget-voice.loading {
+      animation: ai-pulse 1s ease-in-out infinite;
+    }
+
+    .ai-widget-voice.speaking {
+      animation: ai-pulse 0.6s ease-in-out infinite;
+    }
+
+    .ai-widget-voice.error {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    @keyframes ai-pulse {
+      0%, 100% { opacity: 0.7; }
+      50% { opacity: 1; }
     }
 
     .ai-widget-close {
@@ -162,10 +234,45 @@ export function injectStyles(config: WidgetConfig): void {
 
     .ai-widget-message-content code {
       background: rgba(0, 0, 0, 0.1);
-      padding: 2px 6px;
+      padding: 2px 4px;
       border-radius: 4px;
       font-family: 'SF Mono', Monaco, monospace;
       font-size: 13px;
+    }
+
+    .ai-widget-message-content pre {
+      background: rgba(0, 0, 0, 0.1);
+      padding: 12px;
+      border-radius: 8px;
+      margin: 8px 0;
+      overflow-x: auto;
+      font-family: 'SF Mono', Monaco, monospace;
+    }
+
+    .ai-widget-message-content pre code {
+      background: none;
+      padding: 0;
+      display: block;
+      white-space: pre;
+    }
+
+    .ai-widget-message-content ul {
+      margin: 8px 0;
+      padding-left: 20px;
+    }
+
+    .ai-widget-message-content li {
+      margin-bottom: 4px;
+    }
+
+    .ai-widget-message-content a {
+      color: var(--ai-primary);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+
+    .ai-widget-message.user .ai-widget-message-content a {
+      color: white;
     }
 
     .ai-widget-typing {
@@ -205,12 +312,67 @@ export function injectStyles(config: WidgetConfig): void {
       }
     }
 
+    .ai-widget-status-text {
+      color: var(--ai-text-secondary);
+      font-size: 13px;
+      margin-right: 8px;
+      align-self: center;
+    }
+
+    .ai-widget-typing span:nth-child(2) {
+      animation-delay: 0.2s;
+    }
+
+    .ai-widget-typing span:nth-child(3) {
+      animation-delay: 0.4s;
+    }
+
+    .ai-widget-typing span:nth-child(4) {
+      animation-delay: 0.6s;
+    }
+
     .ai-widget-input-container {
       display: flex;
+      align-items: center;
       gap: 8px;
       padding: 12px 16px;
       border-top: 1px solid var(--ai-border);
       background: var(--ai-bg);
+    }
+
+    .ai-widget-mic {
+      flex-shrink: 0;
+      width: 40px;
+      height: 40px;
+      border: none;
+      background: transparent;
+      color: var(--ai-text-secondary);
+      cursor: pointer;
+      border-radius: 10px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s;
+    }
+
+    .ai-widget-mic:hover {
+      background: var(--ai-bg-secondary);
+      color: var(--ai-text);
+    }
+
+    .ai-widget-mic.listening {
+      background: var(--ai-primary);
+      color: white;
+      animation: ai-mic-pulse 1.5s ease-in-out infinite;
+    }
+
+    .ai-widget-mic.error {
+      color: #ef4444;
+    }
+
+    @keyframes ai-mic-pulse {
+      0%, 100% { transform: scale(1); opacity: 1; }
+      50% { transform: scale(1.05); opacity: 0.8; }
     }
 
     .ai-widget-input {
@@ -276,5 +438,5 @@ export function injectStyles(config: WidgetConfig): void {
       }
     }
   `;
-    document.head.appendChild(style);
+  document.head.appendChild(style);
 }
