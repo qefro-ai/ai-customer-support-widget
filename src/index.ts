@@ -13,28 +13,27 @@ import { Widget } from './widget';
 import { injectStyles } from './styles';
 
 // Get configuration from script tag
-function getConfig(): WidgetConfig {
-    const script = document.currentScript as HTMLScriptElement;
-    if (!script) {
+function getConfig(scriptElement: HTMLScriptElement): WidgetConfig {
+    if (!scriptElement) {
         throw new Error('AI Widget: Script tag not found');
     }
 
-    const token = script.dataset.token;
+    const token = scriptElement.dataset.token;
     if (!token) {
         throw new Error('AI Widget: data-token is required');
     }
 
     return {
         token,
-        endpoint: script.dataset.endpoint || 'https://api.example.ai',
-        theme: (script.dataset.theme as 'light' | 'dark') || 'light',
-        position: (script.dataset.position as 'bottom-right' | 'bottom-left') || 'bottom-right',
-        primaryColor: script.dataset.primaryColor || '#6366f1',
-        welcomeMessage: script.dataset.welcomeMessage || 'Hi! How can I help you today?',
+        endpoint: scriptElement.dataset.endpoint || 'https://api.example.ai',
+        theme: (scriptElement.dataset.theme as 'light' | 'dark') || 'light',
+        position: (scriptElement.dataset.position as 'bottom-right' | 'bottom-left') || 'bottom-right',
+        primaryColor: scriptElement.dataset.primaryColor || '#6366f1',
+        welcomeMessage: scriptElement.dataset.welcomeMessage || 'Hi! How can I help you today?',
         // Optional workspace ID for scoped retrieval and system prompts
-        workspaceId: script.dataset.workspaceId || undefined,
+        workspaceId: scriptElement.dataset.workspaceId || undefined,
         // Optional JSON context passed via `data-context` on the script tag
-        context: script.dataset.context ? JSON.parse(script.dataset.context) : undefined,
+        context: scriptElement.dataset.context ? JSON.parse(scriptElement.dataset.context) : undefined,
     };
 }
 
@@ -51,15 +50,18 @@ export interface WidgetConfig {
 
 // Auto-initialize
 (function () {
+    // Capture the script element synchronously while it's executing
+    const currentScript = document.currentScript as HTMLScriptElement;
+
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', init);
+        document.addEventListener('DOMContentLoaded', () => init(currentScript));
     } else {
-        init();
+        init(currentScript);
     }
 
-    function init() {
+    function init(scriptElement: HTMLScriptElement) {
         try {
-            const config = getConfig();
+            const config = getConfig(scriptElement);
             injectStyles(config);
             new Widget(config);
         } catch (error) {
