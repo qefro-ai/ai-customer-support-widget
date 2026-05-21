@@ -12,13 +12,20 @@ interface Message {
     timestamp: Date;
 }
 
+interface Source {
+    url: string;
+    title: string;
+}
+
 interface ChatResponse {
     type: 'token' | 'conversationId' | 'done' | 'error' | 'status';
     content?: string;
     id?: string;
     messageId?: string;
     message?: string;
+    sources?: Source[];
 }
+
 
 export class Widget {
     private config: WidgetConfig;
@@ -34,6 +41,14 @@ export class Widget {
     private micButton: HTMLButtonElement | null = null;
     private unreadCount = 0;  // Track unread messages for badge
     private badge: HTMLElement | null = null;
+    private settings: {
+        primaryColor: string;
+        widgetPosition: string;
+        welcomeMessage: string;
+        leadCaptureEnabled: boolean;
+        leadCaptureFields: string[];
+    } | null = null;
+    private isLeadSubmitted = false;
 
     constructor(config: WidgetConfig) {
         this.config = config;
@@ -59,6 +74,8 @@ export class Widget {
             this.playNotificationSound();
             this.updateBadge();
         }, 1000);
+
+        this.fetchSettings();
     }
 
     private createContainer(): HTMLElement {
@@ -181,8 +198,13 @@ export class Widget {
         this.isOpen = !this.isOpen;
         this.container.classList.toggle('open', this.isOpen);
         if (this.isOpen) {
-            this.input.focus();
-            this.connectWebSocket();
+            if (!this.settings?.leadCaptureEnabled || this.isLeadSubmitted) {
+                this.input.focus();
+                this.connectWebSocket();
+            } else {
+                const nameInput = this.container.querySelector('#lead-name') as HTMLInputElement;
+                nameInput?.focus();
+            }
             // Clear unread count when opened
             this.unreadCount = 0;
             this.updateBadge();
@@ -192,6 +214,213 @@ export class Widget {
     private close(): void {
         this.isOpen = false;
         this.container.classList.remove('open');
+    }
+
+    private async fetchSettings(): Promise<void> {
+        try {
+            const response = await fetch(`${this.config.endpoint}/api/v1/widget/settings`, {
+                headers: {
+                    'x-widget-token': this.config.token,
+                }
+            });
+            if (response.ok) {
+                const data = await response.json();
+                this.settings = {
+                    primaryColor: data.primary_color,
+                    widgetPosition: data.widget_position,
+                    welcomeMessage: data.welcome_message,
+                    leadCaptureEnabled: data.lead_capture_enabled,
+                    leadCaptureFields: data.lead_capture_fields,
+                };
+                
+                // Dynamically update primary color if provided by server settings
+                if (this.settings.primaryColor) {
+                    this.container.style.setProperty('--ai-primary', this.settings.primaryColor);
+                    this.container.style.setProperty('--ai-primary-dark', `color-mix(in srgb, ${this.settings.primaryColor} 85%, black)`);
+                }
+                
+                // If welcome message is different from script tag config, update it
+                if (this.settings.welcomeMessage && this.settings.welcomeMessage !== this.config.welcomeMessage) {
+                    this.config.welcomeMessage = this.settings.welcomeMessage;
+                    const welcomeMsgEl = this.messagesContainer.querySelector('#welcome .ai-widget-message-content');
+                    if (welcomeMsgEl) {
+                        welcomeMsgEl.textContent = this.settings.welcomeMessage;
+                    }
+                }
+                
+                // If lead capture is enabled, check localStorage to see if lead was already submitted
+                this.isLeadSubmitted = localStorage.getItem(`ai-widget-lead-submitted-${this.config.token}`) === 'true';
+                
+                // Initialize the lead capture overlay if needed
+                if (this.settings.leadCaptureEnabled && !this.isLeadSubmitted) {
+                    this.renderLeadCaptureOverlay();
+                }
+            }
+        } catch (error) {
+            console.error('AI Widget: Failed to fetch settings', error);
+        }
+    }
+
+    private renderLeadCaptureOverlay(): void {
+        this.container.querySelector('.ai-widget-lead-overlay')?.remove();
+
+        const overlay = document.createElement('div');
+        overlay.className = 'ai-widget-lead-overlay';
+        
+        const fields = this.settings?.leadCaptureFields || [];
+        const showPhone = fields.includes('phone') || fields.includes('Phone');
+        const showCompany = fields.includes('company') || fields.includes('Company');
+
+        overlay.innerHTML = `
+            <h2 class="ai-widget-lead-title">Welcome!</h2>
+            <p class="ai-widget-lead-subtitle">Please enter your details to start a conversation with our AI support.</p>
+            <form class="ai-widget-lead-form">
+                <div class="ai-widget-lead-field">
+                    <label class="ai-widget-lead-label" for="lead-name">Name</label>
+                    <input class="ai-widget-lead-input" type="text" id="lead-name" placeholder="John Doe" required />
+                </div>
+                <div class="ai-widget-lead-field">
+                    <label class="ai-widget-lead-label" for="lead-email">Email</label>
+                    <input class="ai-widget-lead-input" type="email" id="lead-email" placeholder="john@example.com" required />
+                </div>
+                ${showPhone ? `
+                <div class="ai-widget-lead-field">
+                    <label class="ai-widget-lead-label" for="lead-phone">Phone</label>
+                    <input class="ai-widget-lead-input" type="tel" id="lead-phone" placeholder="+1 (555) 000-0000" required />
+                </div>
+                ` : ''}
+                ${showCompany ? `
+                <div class="ai-widget-lead-field">
+                    <label class="ai-widget-lead-label" for="lead-company">Company</label>
+                    <input class="ai-widget-lead-input" type="text" id="lead-company" placeholder="Acme Corp" required />
+                </div>
+                ` : ''}
+                <div class="ai-widget-lead-error" id="lead-error"></div>
+                <button class="ai-widget-lead-submit" type="submit">
+                    Start Chatting
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                        <polyline points="12 5 19 12 12 19"></polyline>
+                    </svg>
+                </button>
+            </form>
+        `;
+
+        const form = overlay.querySelector('.ai-widget-lead-form') as HTMLFormElement;
+        form.addEventListener('submit', async (e) => {
+            e.preventDefault();
+            const submitBtn = form.querySelector('.ai-widget-lead-submit') as HTMLButtonElement;
+            const errorDiv = form.querySelector('#lead-error') as HTMLElement;
+            
+            const nameInput = form.querySelector('#lead-name') as HTMLInputElement;
+            const emailInput = form.querySelector('#lead-email') as HTMLInputElement;
+            const phoneInput = showPhone ? form.querySelector('#lead-phone') as HTMLInputElement : null;
+            const companyInput = showCompany ? form.querySelector('#lead-company') as HTMLInputElement : null;
+
+            const name = nameInput.value.trim();
+            const email = emailInput.value.trim();
+            const phone = phoneInput ? phoneInput.value.trim() || null : null;
+            const company = companyInput ? companyInput.value.trim() || null : null;
+
+            let hasError = false;
+            let errorMsg = '';
+
+            const markInvalid = (input: HTMLInputElement) => {
+                input.classList.add('invalid');
+                setTimeout(() => input.classList.remove('invalid'), 400);
+            };
+
+            if (!name) {
+                markInvalid(nameInput);
+                hasError = true;
+                errorMsg = 'Name is required. ';
+            }
+            if (!email) {
+                markInvalid(emailInput);
+                hasError = true;
+                errorMsg += 'Email is required. ';
+            } else if (!/\S+@\S+\.\S+/.test(email)) {
+                markInvalid(emailInput);
+                hasError = true;
+                errorMsg += 'Invalid email format. ';
+            }
+
+            if (showPhone && !phone) {
+                if (phoneInput) markInvalid(phoneInput);
+                hasError = true;
+                errorMsg += 'Phone number is required. ';
+            }
+            if (showCompany && !company) {
+                if (companyInput) markInvalid(companyInput);
+                hasError = true;
+                errorMsg += 'Company name is required. ';
+            }
+
+            if (hasError) {
+                errorDiv.textContent = errorMsg;
+                errorDiv.style.display = 'block';
+                return;
+            }
+
+            submitBtn.disabled = true;
+            submitBtn.innerHTML = '<div class="ai-widget-spinner"></div>';
+            errorDiv.style.display = 'none';
+
+            try {
+                const response = await fetch(`${this.config.endpoint}/api/v1/widget/leads`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'x-widget-token': this.config.token,
+                    },
+                    body: JSON.stringify({
+                        name,
+                        email,
+                        phone,
+                        company,
+                        conversation_id: this.conversationId || null,
+                    }),
+                });
+
+                if (response.ok) {
+                    this.isLeadSubmitted = true;
+                    localStorage.setItem(`ai-widget-lead-submitted-${this.config.token}`, 'true');
+                    
+                    overlay.classList.add('fade-out');
+                    setTimeout(() => {
+                        overlay.remove();
+                        this.connectWebSocket();
+                        this.input.focus();
+                    }, 450);
+                } else {
+                    const errData = await response.json().catch(() => ({}));
+                    errorDiv.textContent = errData.message || 'Failed to submit details. Please try again.';
+                    errorDiv.style.display = 'block';
+                    submitBtn.disabled = false;
+                    submitBtn.innerHTML = `
+                        Start Chatting
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                            <line x1="5" y1="12" x2="19" y2="12"></line>
+                            <polyline points="12 5 19 12 12 19"></polyline>
+                        </svg>
+                    `;
+                }
+            } catch (err) {
+                console.error('Lead submission error:', err);
+                errorDiv.textContent = 'Connection error. Please try again.';
+                errorDiv.style.display = 'block';
+                submitBtn.disabled = false;
+                submitBtn.innerHTML = `
+                    Start Chatting
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                        <polyline points="12 5 19 12 12 19"></polyline>
+                    </svg>
+                `;
+            }
+        });
+
+        this.container.querySelector('.ai-widget-panel')?.appendChild(overlay);
     }
 
     private async connectWebSocket(): Promise<void> {
@@ -237,6 +466,9 @@ export class Widget {
                 case 'done':
                     this.isTyping = false;
                     this.hideTypingIndicator();
+                    if (response.sources && response.sources.length > 0) {
+                        this.renderSourcesForLastMessage(response.sources);
+                    }
                     break;
 
                 case 'error':
@@ -392,6 +624,33 @@ export class Widget {
             const el = this.messagesContainer.querySelector(`[data-id="${lastMessage.id}"] .ai-widget-message-content`);
             if (el) {
                 el.innerHTML = this.formatContent(lastMessage.content);
+            }
+        }
+        this.scrollToBottom();
+    }
+
+    private renderSourcesForLastMessage(sources: Source[]): void {
+        const lastMessage = this.messages[this.messages.length - 1];
+        if (lastMessage && lastMessage.role === 'assistant') {
+            const el = this.messagesContainer.querySelector(`[data-id="${lastMessage.id}"]`);
+            if (el) {
+                // Check if sources are already rendered
+                if (el.querySelector('.ai-widget-sources')) return;
+
+                const sourcesEl = document.createElement('div');
+                sourcesEl.className = 'ai-widget-sources';
+                sourcesEl.innerHTML = `
+                    <div class="ai-widget-sources-title">Sources:</div>
+                    <div class="ai-widget-sources-list">
+                        ${sources.map(source => `
+                            <a href="${source.url}" target="_blank" rel="noopener noreferrer" class="ai-widget-source-pill">
+                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ai-widget-source-icon"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                                <span>${source.title}</span>
+                            </a>
+                        `).join('')}
+                    </div>
+                `;
+                el.appendChild(sourcesEl);
             }
         }
         this.scrollToBottom();
