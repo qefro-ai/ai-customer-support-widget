@@ -10,11 +10,11 @@ export function injectStyles(config: WidgetConfig): void {
     #ai-widget-container {
       --ai-primary: ${config.primaryColor};
       --ai-primary-dark: color-mix(in srgb, ${config.primaryColor} 85%, black);
-      --ai-bg: ${config.theme === 'dark' ? '#1e1e2e' : '#ffffff'};
-      --ai-bg-secondary: ${config.theme === 'dark' ? '#2a2a3e' : '#f5f5f7'};
+      --ai-bg: ${config.theme === 'dark' ? 'rgba(30, 30, 46, 0.92)' : 'rgba(255, 255, 255, 0.92)'};
+      --ai-bg-secondary: ${config.theme === 'dark' ? 'rgba(42, 42, 62, 0.5)' : 'rgba(245, 245, 247, 0.7)'};
       --ai-text: ${config.theme === 'dark' ? '#e4e4e7' : '#18181b'};
       --ai-text-secondary: ${config.theme === 'dark' ? '#a1a1aa' : '#71717a'};
-      --ai-border: ${config.theme === 'dark' ? '#3f3f46' : '#e4e4e7'};
+      --ai-border: ${config.theme === 'dark' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)'};
       position: fixed;
       z-index: 999999;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
@@ -35,20 +35,21 @@ export function injectStyles(config: WidgetConfig): void {
       width: 56px;
       height: 56px;
       border-radius: 50%;
-      background: var(--ai-primary);
+      background: linear-gradient(135deg, var(--ai-primary), var(--ai-primary-dark));
       border: none;
       cursor: pointer;
       display: flex;
       align-items: center;
       justify-content: center;
       color: white;
-      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
-      transition: transform 0.2s, box-shadow 0.2s;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.15), 0 0 15px color-mix(in srgb, var(--ai-primary) 30%, transparent);
+      transition: transform 0.3s cubic-bezier(0.16, 1, 0.3, 1), box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+      backdrop-filter: blur(12px);
     }
 
     .ai-widget-trigger:hover {
-      transform: scale(1.05);
-      box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
+      transform: scale(1.05) translateY(-2px);
+      box-shadow: 0 12px 28px rgba(0, 0, 0, 0.22), 0 0 25px color-mix(in srgb, var(--ai-primary) 45%, transparent);
     }
 
     .ai-widget-badge {
@@ -86,20 +87,21 @@ export function injectStyles(config: WidgetConfig): void {
       height: 550px;
       background: var(--ai-bg);
       border-radius: 16px;
-      box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+      box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
       overflow: hidden;
       border: 1px solid var(--ai-border);
+      backdrop-filter: blur(20px);
     }
 
     #ai-widget-container.open .ai-widget-panel {
       display: flex;
-      animation: ai-slide-in 0.3s ease;
+      animation: ai-slide-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
     }
 
     @keyframes ai-slide-in {
       from {
         opacity: 0;
-        transform: translateY(10px) scale(0.95);
+        transform: translateY(20px) scale(0.96);
       }
       to {
         opacity: 1;
@@ -112,7 +114,7 @@ export function injectStyles(config: WidgetConfig): void {
       align-items: center;
       justify-content: space-between;
       padding: 16px 20px;
-      background: var(--ai-primary);
+      background: linear-gradient(135deg, var(--ai-primary), var(--ai-primary-dark));
       color: white;
       font-weight: 600;
       font-size: 16px;
@@ -221,15 +223,18 @@ export function injectStyles(config: WidgetConfig): void {
     }
 
     .ai-widget-message.user .ai-widget-message-content {
-      background: var(--ai-primary);
+      background: linear-gradient(135deg, var(--ai-primary), var(--ai-primary-dark));
       color: white;
       border-bottom-right-radius: 4px;
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.05);
     }
 
     .ai-widget-message.assistant .ai-widget-message-content {
       background: var(--ai-bg-secondary);
       color: var(--ai-text);
       border-bottom-left-radius: 4px;
+      border: 1px solid var(--ai-border);
+      box-shadow: 0 3px 10px rgba(0, 0, 0, 0.02);
     }
 
     .ai-widget-message-content code {
@@ -691,6 +696,122 @@ export function injectStyles(config: WidgetConfig): void {
 
     @keyframes ai-spin {
       to { transform: rotate(360deg); }
+    }
+
+    .ai-widget-handoff-trigger {
+      background: none;
+      border: none;
+      color: white;
+      cursor: pointer;
+      opacity: 0.8;
+      transition: opacity 0.2s, transform 0.2s;
+      padding: 4px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .ai-widget-handoff-trigger:hover {
+      opacity: 1;
+      transform: scale(1.1);
+    }
+
+    .ai-widget-feedback {
+      display: flex;
+      gap: 6px;
+      margin-top: 4px;
+      padding-left: 4px;
+      animation: ai-fade-in 0.25s ease;
+    }
+
+    .ai-widget-feedback-btn {
+      background: var(--ai-bg-secondary);
+      border: 1px solid var(--ai-border);
+      color: var(--ai-text-secondary);
+      border-radius: 6px;
+      padding: 4px 6px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.2s ease;
+    }
+
+    .ai-widget-feedback-btn:hover {
+      color: var(--ai-text);
+      background: var(--ai-border);
+      transform: scale(1.05);
+    }
+
+    .ai-widget-feedback-btn.active {
+      color: white;
+      border-color: transparent;
+    }
+
+    .ai-widget-feedback-btn.up.active {
+      background: #22c55e;
+    }
+
+    .ai-widget-feedback-btn.down.active {
+      background: #ef4444;
+    }
+
+    .ai-widget-feedback-btn:disabled {
+      cursor: not-allowed;
+      opacity: 0.7;
+    }
+
+    .ai-widget-handoff-container {
+      width: 100%;
+    }
+
+    .ai-widget-handoff-title {
+      font-weight: 600;
+      margin-bottom: 8px;
+      font-size: 13px;
+      color: var(--ai-text);
+    }
+
+    .ai-widget-handoff-choices {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .ai-widget-handoff-btn {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: var(--ai-bg-secondary);
+      border: 1px solid var(--ai-border);
+      color: var(--ai-text);
+      border-radius: 8px;
+      text-decoration: none !important;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      transition: all 0.2s cubic-bezier(0.25, 0.8, 0.25, 1);
+      width: 100%;
+      box-sizing: border-box;
+      text-align: left;
+    }
+
+    .ai-widget-handoff-btn svg {
+      color: var(--ai-primary);
+      transition: transform 0.2s ease;
+    }
+
+    .ai-widget-handoff-btn:hover {
+      background: ${config.theme === 'dark' ? 'rgba(255, 255, 255, 0.08)' : '#ffffff'};
+      border-color: var(--ai-primary);
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+      transform: translateY(-1px);
+    }
+
+    .ai-widget-handoff-btn:hover svg {
+      transform: scale(1.1) translateX(2px);
     }
   `;
   document.head.appendChild(style);

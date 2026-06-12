@@ -4,6 +4,7 @@
 
 import type { WidgetConfig } from './index';
 import { SpeechToText, STTState } from './tts/stt';
+import DOMPurify from 'dompurify';
 
 interface Message {
     id: string;
@@ -47,6 +48,11 @@ export class Widget {
         welcomeMessage: string;
         leadCaptureEnabled: boolean;
         leadCaptureFields: string[];
+        handoffConfig?: {
+            email_recipient?: string | null;
+            whatsapp_number?: string | null;
+            webhook_url?: string | null;
+        } | null;
     } | null = null;
     private isLeadSubmitted = false;
 
@@ -94,20 +100,12 @@ export class Widget {
         <div class="ai-widget-header">
           <span>AI Assistant</span>
           <div class="ai-widget-header-actions">
-            <!-- Voice button hidden for now - TTS needs improvement -->
-            <!--
-            <button class="ai-widget-voice" aria-label="Toggle voice" title="Voice is off">
-              <svg class="voice-off" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                <line x1="23" y1="9" x2="17" y2="15"></line>
-                <line x1="17" y1="9" x2="23" y2="15"></line>
-              </svg>
-              <svg class="voice-on" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="display:none">
-                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
-                <path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+            <button class="ai-widget-handoff-trigger" aria-label="Contact Support" title="Contact Support">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
+                <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
               </svg>
             </button>
-            -->
             <button class="ai-widget-close" aria-label="Close chat">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -158,6 +156,9 @@ export class Widget {
 
         const close = this.container.querySelector('.ai-widget-close')!;
         close.addEventListener('click', () => this.close());
+
+        const handoffTrigger = this.container.querySelector('.ai-widget-handoff-trigger')!;
+        handoffTrigger.addEventListener('click', () => this.renderHandoffOptions());
 
         // Mic button (STT)
         if (this.micButton) {
@@ -231,6 +232,7 @@ export class Widget {
                     welcomeMessage: data.welcome_message,
                     leadCaptureEnabled: data.lead_capture_enabled,
                     leadCaptureFields: data.lead_capture_fields,
+                    handoffConfig: data.handoff_config,
                 };
                 
                 // Dynamically update primary color if provided by server settings
@@ -460,7 +462,23 @@ export class Widget {
                     break;
 
                 case 'token':
-                    this.appendToLastMessage(response.content!);
+                    const lastMsg = this.messages[this.messages.length - 1];
+                    if (!lastMsg || lastMsg.role !== 'assistant') {
+                        // Spontaneous message from agent
+                        this.addMessage({
+                            id: `agent-reply-${Date.now()}`,
+                            role: 'assistant',
+                            content: response.content!,
+                            timestamp: new Date(),
+                        });
+                        this.playNotificationSound();
+                        if (!this.isOpen) {
+                            this.unreadCount++;
+                            this.updateBadge();
+                        }
+                    } else {
+                        this.appendToLastMessage(response.content!);
+                    }
                     break;
 
                 case 'done':
@@ -468,6 +486,14 @@ export class Widget {
                     this.hideTypingIndicator();
                     if (response.sources && response.sources.length > 0) {
                         this.renderSourcesForLastMessage(response.sources);
+                    }
+                    if (response.messageId) {
+                        this.renderFeedbackButtonsForLastMessage(response.messageId);
+                    }
+                    const checkLastMsg = this.messages[this.messages.length - 1];
+                    if (checkLastMsg && checkLastMsg.role === 'assistant' && 
+                        checkLastMsg.content.includes("I don't have that specific information in my knowledge base.")) {
+                        this.renderHandoffOptions();
                     }
                     break;
 
@@ -587,6 +613,14 @@ export class Widget {
                         } else if (data.type === 'done') {
                             this.isTyping = false;
                             this.hideTypingIndicator();
+                            if (data.messageId) {
+                                this.renderFeedbackButtonsForLastMessage(data.messageId);
+                            }
+                            const checkLastMsg = this.messages[this.messages.length - 1];
+                            if (checkLastMsg && checkLastMsg.role === 'assistant' && 
+                                checkLastMsg.content.includes("I don't have that specific information in my knowledge base.")) {
+                                this.renderHandoffOptions();
+                            }
                         }
                     }
                 }
@@ -639,7 +673,7 @@ export class Widget {
 
                 const sourcesEl = document.createElement('div');
                 sourcesEl.className = 'ai-widget-sources';
-                sourcesEl.innerHTML = `
+                sourcesEl.innerHTML = DOMPurify.sanitize(`
                     <div class="ai-widget-sources-title">Sources:</div>
                     <div class="ai-widget-sources-list">
                         ${sources.map(source => `
@@ -649,7 +683,7 @@ export class Widget {
                             </a>
                         `).join('')}
                     </div>
-                `;
+                `, { ALLOWED_TAGS: ['div', 'a', 'span', 'svg', 'path'], ALLOWED_ATTR: ['class', 'href', 'target', 'rel', 'width', 'height', 'viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'd'] });
                 el.appendChild(sourcesEl);
             }
         }
@@ -677,10 +711,11 @@ export class Widget {
         // 4. Handle newlines mapping to <br> (but not inside pre blocks)
         // We'll split by <pre> blocks and only apply to other parts
         const parts = formatted.split(/(<pre>[\s\S]*?<\/pre>)/);
-        return parts.map(part => {
+        const result = parts.map(part => {
             if (part.startsWith('<pre>')) return part;
             return part.replace(/\n/g, '<br>');
         }).join('').trim();
+        return DOMPurify.sanitize(result, { ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'br', 'a', 'ul', 'li'], ALLOWED_ATTR: ['href', 'target', 'rel'] });
     }
 
     private showTypingIndicator(): void {
@@ -808,6 +843,249 @@ export class Widget {
             this.badge.style.display = 'flex';
         } else {
             this.badge.style.display = 'none';
+        }
+    }
+
+    // Helper methods for feedback and handoff features
+    private renderFeedbackButtonsForLastMessage(messageId: string): void {
+        const lastMessage = this.messages[this.messages.length - 1];
+        if (lastMessage && lastMessage.role === 'assistant') {
+            const el = this.messagesContainer.querySelector(`[data-id="${lastMessage.id}"]`);
+            if (el) {
+                if (el.querySelector('.ai-widget-feedback')) return;
+
+                const feedbackEl = document.createElement('div');
+                feedbackEl.className = 'ai-widget-feedback';
+                feedbackEl.innerHTML = `
+                    <button class="ai-widget-feedback-btn up" title="Helpful" aria-label="Helpful">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"></path></svg>
+                    </button>
+                    <button class="ai-widget-feedback-btn down" title="Not Helpful" aria-label="Not Helpful">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 15v4a3 3 0 0 0 3 3l4-9V2H5.72a2 2 0 0 0-2 1.7l-1.38 9a2 2 0 0 0 2 2.3zm7-13h3a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-3"></path></svg>
+                    </button>
+                `;
+                el.appendChild(feedbackEl);
+
+                const upBtn = feedbackEl.querySelector('.up') as HTMLButtonElement;
+                const downBtn = feedbackEl.querySelector('.down') as HTMLButtonElement;
+
+                const submitFeedback = async (isHelpful: boolean, clickedBtn: HTMLButtonElement, otherBtn: HTMLButtonElement) => {
+                    try {
+                        const response = await fetch(`${this.config.endpoint}/api/v1/widget/messages/${messageId}/feedback`, {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'x-widget-token': this.config.token,
+                            },
+                            body: JSON.stringify({
+                                is_helpful: isHelpful,
+                                comment: null
+                            })
+                        });
+
+                        if (response.ok) {
+                            clickedBtn.classList.add('active');
+                            otherBtn.classList.remove('active');
+                            clickedBtn.disabled = true;
+                            otherBtn.disabled = true;
+                        }
+                    } catch (e) {
+                        console.error('Failed to submit feedback', e);
+                    }
+                };
+
+                upBtn.addEventListener('click', () => submitFeedback(true, upBtn, downBtn));
+                downBtn.addEventListener('click', () => submitFeedback(false, downBtn, upBtn));
+            }
+        }
+    }
+
+    private renderHandoffOptions(): void {
+        const existingHandoff = this.messagesContainer.querySelector('.ai-widget-handoff-container');
+        if (existingHandoff) {
+            existingHandoff.scrollIntoView({ behavior: 'smooth' });
+            return;
+        }
+
+        const handoffConfig = this.settings?.handoffConfig;
+        const el = document.createElement('div');
+        el.className = 'ai-widget-message assistant ai-widget-handoff-container';
+        
+        let optionsHtml = '';
+        
+        if (handoffConfig?.whatsapp_number) {
+            const waNumber = handoffConfig.whatsapp_number.replace(/\D/g, '');
+            optionsHtml += `
+                <a href="https://wa.me/${waNumber}?text=Hello,%20I%20need%20help%20with%20my%20support%20request.%20Ref:%20${this.conversationId || ''}" 
+                   target="_blank" rel="noopener noreferrer" class="ai-widget-handoff-btn wa">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                    WhatsApp
+                </a>
+            `;
+        }
+
+        if (handoffConfig?.email_recipient) {
+            optionsHtml += `
+                <a href="mailto:${handoffConfig.email_recipient}?subject=Support%20Request%20(${this.conversationId || ''})&body=Hi%20Support,%0D%0A%0D%0AI%20need%20assistance.%0D%0A%0D%0AReference%20ID:%20${this.conversationId || ''}" 
+                   class="ai-widget-handoff-btn email">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                    Email Support
+                </a>
+            `;
+        }
+
+        if (handoffConfig?.webhook_url) {
+            optionsHtml += `
+                <button class="ai-widget-handoff-btn ticket-trigger">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
+                    Submit Ticket
+                </button>
+            `;
+        }
+
+        optionsHtml += `
+            <button class="ai-widget-handoff-btn live-agent">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+                Talk to Live Agent
+            </button>
+        `;
+
+        el.innerHTML = `
+            <div class="ai-widget-message-content" style="width: 100%;">
+                <div class="ai-widget-handoff-title">Would you like to talk to a human?</div>
+                <div class="ai-widget-handoff-choices">
+                    ${optionsHtml}
+                </div>
+                <div class="ai-widget-ticket-form" style="display: none; margin-top: 12px; width: 100%;">
+                    <textarea class="ai-widget-ticket-desc" placeholder="Describe your issue..." rows="3" style="width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid var(--ai-border); background: var(--ai-bg-secondary); color: var(--ai-text); resize: none; margin-bottom: 8px; font-family: inherit; font-size: 13px;"></textarea>
+                    <div style="display: flex; gap: 8px; justify-content: flex-end;">
+                        <button class="ai-widget-ticket-cancel" style="background: none; border: 1px solid var(--ai-border); color: var(--ai-text); padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">Cancel</button>
+                        <button class="ai-widget-ticket-submit" style="background: var(--ai-primary); border: none; color: white; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">Submit</button>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        this.messagesContainer.appendChild(el);
+        this.scrollToBottom();
+
+        const liveBtn = el.querySelector('.live-agent') as HTMLButtonElement;
+        if (liveBtn) {
+            liveBtn.addEventListener('click', () => {
+                this.requestLiveAgentTakeover(el);
+            });
+        }
+
+        const ticketBtn = el.querySelector('.ticket-trigger') as HTMLButtonElement;
+        if (ticketBtn) {
+            const ticketForm = el.querySelector('.ai-widget-ticket-form') as HTMLElement;
+            const choices = el.querySelector('.ai-widget-handoff-choices') as HTMLElement;
+            const cancelBtn = el.querySelector('.ai-widget-ticket-cancel') as HTMLButtonElement;
+            const submitBtn = el.querySelector('.ai-widget-ticket-submit') as HTMLButtonElement;
+            const descArea = el.querySelector('.ai-widget-ticket-desc') as HTMLTextAreaElement;
+
+            ticketBtn.addEventListener('click', () => {
+                choices.style.display = 'none';
+                ticketForm.style.display = 'block';
+                descArea.focus();
+            });
+
+            cancelBtn.addEventListener('click', () => {
+                ticketForm.style.display = 'none';
+                choices.style.display = 'flex';
+            });
+
+            submitBtn.addEventListener('click', async () => {
+                const desc = descArea.value.trim();
+                if (!desc) {
+                    descArea.classList.add('invalid');
+                    setTimeout(() => descArea.classList.remove('invalid'), 400);
+                    return;
+                }
+
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Submitting...';
+
+                try {
+                    if (handoffConfig?.webhook_url) {
+                        await fetch(handoffConfig.webhook_url, {
+                            method: 'POST',
+                            mode: 'no-cors',
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            body: JSON.stringify({
+                                event: 'ticket.created',
+                                conversation_id: this.conversationId,
+                                description: desc,
+                                timestamp: new Date().toISOString()
+                            })
+                        }).catch(e => console.error('Webhook payload forward fail:', e));
+                    }
+
+                    this.addMessage({
+                        id: `ticket-msg-${Date.now()}`,
+                        role: 'user',
+                        content: `Ticket Submitted: ${desc}`,
+                        timestamp: new Date()
+                    });
+
+                    if (this.conversationId) {
+                        await fetch(`${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff`, {
+                            method: 'POST',
+                            headers: {
+                                'x-widget-token': this.config.token,
+                            }
+                        });
+                    }
+
+                    ticketForm.innerHTML = `<div style="color: var(--ai-primary); font-size: 13px; font-weight: 500;">Ticket submitted successfully! A representative will follow up.</div>`;
+                    setTimeout(() => {
+                        el.remove();
+                    }, 3000);
+                } catch (e) {
+                    console.error(e);
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Submit';
+                }
+            });
+        }
+    }
+
+    private async requestLiveAgentTakeover(containerEl: HTMLElement): Promise<void> {
+        if (!this.conversationId) return;
+
+        const liveBtn = containerEl.querySelector('.live-agent') as HTMLButtonElement;
+        if (liveBtn) {
+            liveBtn.disabled = true;
+            liveBtn.innerHTML = '<div class="ai-widget-spinner" style="width: 14px; height: 14px; margin: 0 auto; border-color: var(--ai-primary);"></div>';
+        }
+
+        try {
+            const response = await fetch(`${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff`, {
+                method: 'POST',
+                headers: {
+                    'x-widget-token': this.config.token,
+                }
+            });
+
+            if (response.ok) {
+                this.addMessage({
+                    id: `takeover-msg-${Date.now()}`,
+                    role: 'assistant',
+                    content: 'Live agent takeover requested. A support agent will be with you shortly.',
+                    timestamp: new Date()
+                });
+                containerEl.remove();
+            } else {
+                throw new Error('Takeover failed');
+            }
+        } catch (e) {
+            console.error(e);
+            if (liveBtn) {
+                liveBtn.disabled = false;
+                liveBtn.innerHTML = 'Talk to Live Agent';
+            }
         }
     }
 
