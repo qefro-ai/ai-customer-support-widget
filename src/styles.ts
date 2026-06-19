@@ -22,12 +22,16 @@ export function injectStyles(config: WidgetConfig): void {
 
     #ai-widget-container.bottom-right {
       bottom: 20px;
+      bottom: calc(env(safe-area-inset-bottom) + 20px);
       right: 20px;
+      right: calc(env(safe-area-inset-right) + 20px);
     }
 
     #ai-widget-container.bottom-left {
       bottom: 20px;
+      bottom: calc(env(safe-area-inset-bottom) + 20px);
       left: 20px;
+      left: calc(env(safe-area-inset-left) + 20px);
     }
 
     .ai-widget-trigger {
@@ -83,14 +87,16 @@ export function injectStyles(config: WidgetConfig): void {
     .ai-widget-panel {
       display: none;
       flex-direction: column;
-      width: 380px;
-      height: 550px;
+      width: min(380px, calc(100vw - 32px));
+      height: min(550px, calc(100dvh - 104px));
+      max-height: calc(100dvh - 104px);
       background: var(--ai-bg);
       border-radius: 16px;
       box-shadow: 0 12px 40px rgba(0, 0, 0, 0.25);
       overflow: hidden;
       border: 1px solid var(--ai-border);
       backdrop-filter: blur(20px);
+      box-sizing: border-box;
     }
 
     #ai-widget-container.open .ai-widget-panel {
@@ -416,6 +422,29 @@ export function injectStyles(config: WidgetConfig): void {
       background: var(--ai-bg);
     }
 
+    .ai-widget-inline-status {
+      display: none;
+      padding: 10px 16px;
+      border-top: 1px solid var(--ai-border);
+      background: var(--ai-bg-secondary);
+      color: var(--ai-text-secondary);
+      font-size: 12px;
+      line-height: 1.45;
+    }
+
+    .ai-widget-inline-status.visible {
+      display: block;
+    }
+
+    .ai-widget-inline-status.error {
+      background: rgba(239, 68, 68, 0.08);
+      color: #fca5a5;
+    }
+
+    .ai-widget-inline-status.info {
+      color: var(--ai-text-secondary);
+    }
+
     .ai-widget-mic {
       flex-shrink: 0;
       width: 40px;
@@ -492,6 +521,15 @@ export function injectStyles(config: WidgetConfig): void {
       background: var(--ai-primary-dark);
     }
 
+    .ai-widget-send:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    .ai-widget-send:disabled:hover {
+      background: var(--ai-primary);
+    }
+
     /* Scrollbar styling */
     .ai-widget-messages::-webkit-scrollbar {
       width: 6px;
@@ -507,10 +545,30 @@ export function injectStyles(config: WidgetConfig): void {
     }
 
     /* Mobile responsive */
-    @media (max-width: 420px) {
+    @media (max-width: 640px) {
+      #ai-widget-container.bottom-right {
+        right: 12px;
+        right: calc(env(safe-area-inset-right) + 12px);
+        bottom: 12px;
+        bottom: calc(env(safe-area-inset-bottom) + 12px);
+      }
+
+      #ai-widget-container.bottom-left {
+        left: 12px;
+        left: calc(env(safe-area-inset-left) + 12px);
+        bottom: 12px;
+        bottom: calc(env(safe-area-inset-bottom) + 12px);
+      }
+
       .ai-widget-panel {
-        width: calc(100vw - 40px);
-        height: calc(100vh - 120px);
+        width: calc(100vw - 24px);
+        height: min(calc(100dvh - 24px), 720px);
+        max-height: calc(100dvh - 24px);
+        border-radius: 20px;
+      }
+
+      .ai-widget-messages {
+        padding: 14px;
       }
     }
 
@@ -808,6 +866,19 @@ export function injectStyles(config: WidgetConfig): void {
       border-color: var(--ai-primary);
       box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
       transform: translateY(-1px);
+    }
+
+    .ai-widget-handoff-btn:disabled {
+      opacity: 0.65;
+      cursor: not-allowed;
+      transform: none;
+    }
+
+    .ai-widget-handoff-btn:disabled:hover {
+      background: var(--ai-bg-secondary);
+      border-color: var(--ai-border);
+      box-shadow: none;
+      transform: none;
     }
 
     .ai-widget-handoff-btn:hover svg {

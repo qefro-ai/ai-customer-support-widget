@@ -33,6 +33,8 @@ export class Widget {
     private container: HTMLElement;
     private messagesContainer: HTMLElement;
     private input: HTMLTextAreaElement;
+    private sendButton: HTMLButtonElement;
+    private inlineStatus: HTMLElement;
     private ws: WebSocket | null = null;
     private conversationId: string | null = null;
     private messages: Message[] = [];
@@ -61,6 +63,8 @@ export class Widget {
         this.container = this.createContainer();
         this.messagesContainer = this.container.querySelector('.ai-widget-messages')!;
         this.input = this.container.querySelector('.ai-widget-input')!;
+        this.sendButton = this.container.querySelector('.ai-widget-send')!;
+        this.inlineStatus = this.container.querySelector('.ai-widget-inline-status')!;
         this.micButton = this.container.querySelector('.ai-widget-mic');
 
         // Initialize STT (Speech-to-Text)
@@ -71,6 +75,7 @@ export class Widget {
         this.setupEventListeners();
         this.addWelcomeMessage();
         this.updateMicButton();
+        this.updateSendButtonState();
 
         // Initialize badge reference
         this.badge = this.container.querySelector('.ai-widget-badge');
@@ -115,6 +120,7 @@ export class Widget {
           </div>
         </div>
         <div class="ai-widget-messages"></div>
+        <div class="ai-widget-inline-status" aria-live="polite"></div>
         <div class="ai-widget-input-container">
           <button class="ai-widget-mic" aria-label="Voice input" title="Click to speak">
             <svg class="mic-idle" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -181,7 +187,37 @@ export class Widget {
         this.input.addEventListener('input', () => {
             this.input.style.height = 'auto';
             this.input.style.height = Math.min(this.input.scrollHeight, 120) + 'px';
+            this.updateSendButtonState();
         });
+    }
+
+    private updateSendButtonState(): void {
+        this.sendButton.disabled = this.isTyping || !this.input.value.trim();
+    }
+
+    private setInlineStatus(message: string | null, tone: 'info' | 'error' = 'info'): void {
+        this.inlineStatus.classList.remove('visible', 'info', 'error');
+
+        if (!message) {
+            this.inlineStatus.textContent = '';
+            return;
+        }
+
+        this.inlineStatus.textContent = message;
+        this.inlineStatus.classList.add('visible', tone);
+    }
+
+    private finishTyping(): void {
+        this.isTyping = false;
+        this.hideTypingIndicator();
+        this.updateSendButtonState();
+    }
+
+    private restoreLiveAgentButton(button: HTMLButtonElement): void {
+        button.innerHTML = `
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
+            Talk to Live Agent
+        `;
     }
 
     private addWelcomeMessage(): void {
@@ -260,6 +296,7 @@ export class Widget {
             }
         } catch (error) {
             console.error('AI Widget: Failed to fetch settings', error);
+            this.setInlineStatus('Using default widget settings while the live config is unavailable.', 'info');
         }
     }
 
@@ -436,6 +473,7 @@ export class Widget {
 
         this.ws.onopen = () => {
             console.log('AI Widget: WebSocket connected');
+            this.setInlineStatus(null);
         };
 
         this.ws.onmessage = (event) => {
@@ -444,10 +482,15 @@ export class Widget {
 
         this.ws.onerror = (error) => {
             console.error('AI Widget: WebSocket error', error);
+            this.setInlineStatus('Live connection looks unstable. Messages will retry over HTTP if needed.', 'info');
         };
 
         this.ws.onclose = () => {
             console.log('AI Widget: WebSocket closed');
+            if (this.isTyping) {
+                this.finishTyping();
+                this.setInlineStatus('Connection closed before the reply finished. Please try sending again.', 'error');
+            }
             this.ws = null;
         };
     }
@@ -482,8 +525,7 @@ export class Widget {
                     break;
 
                 case 'done':
-                    this.isTyping = false;
-                    this.hideTypingIndicator();
+                    this.finishTyping();
                     if (response.sources && response.sources.length > 0) {
                         this.renderSourcesForLastMessage(response.sources);
                     }
@@ -498,8 +540,8 @@ export class Widget {
                     break;
 
                 case 'error':
-                    this.isTyping = false;
-                    this.hideTypingIndicator();
+                    this.finishTyping();
+                    this.setInlineStatus('Something went wrong while generating the reply. Please try again.', 'error');
                     this.addMessage({
                         id: Date.now().toString(),
                         role: 'assistant',
@@ -521,6 +563,8 @@ export class Widget {
         const content = this.input.value.trim();
         if (!content || this.isTyping) return;
 
+        this.setInlineStatus(null);
+
         // Add user message
         this.addMessage({
             id: Date.now().toString(),
@@ -535,6 +579,7 @@ export class Widget {
 
         // Show typing indicator
         this.isTyping = true;
+        this.updateSendButtonState();
         this.showTypingIndicator();
 
         // Connect if needed
@@ -611,8 +656,7 @@ export class Widget {
                         } else if (data.type === 'conversationId') {
                             this.conversationId = data.id;
                         } else if (data.type === 'done') {
-                            this.isTyping = false;
-                            this.hideTypingIndicator();
+                            this.finishTyping();
                             if (data.messageId) {
                                 this.renderFeedbackButtonsForLastMessage(data.messageId);
                             }
@@ -625,10 +669,12 @@ export class Widget {
                     }
                 }
             }
+
+            this.finishTyping();
         } catch (error) {
             console.error('AI Widget: HTTP request failed', error);
-            this.isTyping = false;
-            this.hideTypingIndicator();
+            this.finishTyping();
+            this.setInlineStatus('Message failed to send. Please check your connection and try again.', 'error');
             this.addMessage({
                 id: Date.now().toString(),
                 role: 'assistant',
@@ -770,6 +816,8 @@ export class Widget {
             this.input.style.height = 'auto';
             this.input.style.height = Math.min(this.input.scrollHeight, 120) + 'px';
         }
+
+        this.updateSendButtonState();
     }
 
     private handleSTTStateChange(state: STTState): void {
@@ -1061,6 +1109,8 @@ export class Widget {
             liveBtn.innerHTML = '<div class="ai-widget-spinner" style="width: 14px; height: 14px; margin: 0 auto; border-color: var(--ai-primary);"></div>';
         }
 
+        this.setInlineStatus(null);
+
         try {
             const response = await fetch(`${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff`, {
                 method: 'POST',
@@ -1084,8 +1134,9 @@ export class Widget {
             console.error(e);
             if (liveBtn) {
                 liveBtn.disabled = false;
-                liveBtn.innerHTML = 'Talk to Live Agent';
+                this.restoreLiveAgentButton(liveBtn);
             }
+            this.setInlineStatus('Could not request a live agent right now. Please try again.', 'error');
         }
     }
 

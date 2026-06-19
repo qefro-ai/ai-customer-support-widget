@@ -12,6 +12,15 @@
 import { Widget } from './widget';
 import { injectStyles } from './styles';
 
+function tryParseJSON(value: string): Record<string, any> | undefined {
+    try {
+        return JSON.parse(value);
+    } catch {
+        console.error('AI Widget: Invalid JSON in data-context attribute');
+        return undefined;
+    }
+}
+
 // Get configuration from script tag
 function getConfig(scriptElement: HTMLScriptElement): WidgetConfig {
     if (!scriptElement) {
@@ -33,7 +42,7 @@ function getConfig(scriptElement: HTMLScriptElement): WidgetConfig {
         // Optional workspace ID for scoped retrieval and system prompts
         workspaceId: scriptElement.dataset.workspaceId || undefined,
         // Optional JSON context passed via `data-context` on the script tag
-        context: scriptElement.dataset.context ? JSON.parse(scriptElement.dataset.context) : undefined,
+        context: scriptElement.dataset.context ? tryParseJSON(scriptElement.dataset.context) : undefined,
     };
 }
 
