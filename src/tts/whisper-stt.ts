@@ -1,3 +1,5 @@
+import STTWorker from './whisper.worker?worker&inline';
+
 export type WhisperSTTState = 'idle' | 'loading' | 'ready' | 'listening' | 'processing' | 'error' | 'unsupported';
 
 export class WhisperSTT {
@@ -8,10 +10,8 @@ export class WhisperSTT {
     private onStateChange: ((state: WhisperSTTState) => void) | null = null;
     private onResult: ((transcript: string) => void) | null = null;
     private onProgress: ((progress: number) => void) | null = null;
-    private workerPath: string;
 
-    constructor(workerPath: string) {
-        this.workerPath = workerPath;
+    constructor(workerPath?: string) {
         this.checkSupport();
     }
 
@@ -51,9 +51,7 @@ export class WhisperSTT {
         this.setState('loading');
 
         return new Promise<void>((resolve, reject) => {
-            this.worker = new Worker(new URL(this.workerPath, import.meta.url), {
-                type: 'module'
-            });
+            this.worker = new STTWorker();
 
             this.worker.addEventListener('message', (event) => {
                 const message = event.data;
@@ -114,19 +112,34 @@ export class WhisperSTT {
                 // Stop all tracks to release microphone
                 stream.getTracks().forEach(track => track.stop());
 
-                const audioBlob = new Blob(this.audioChunks);
-                const arrayBuffer = await audioBlob.arrayBuffer();
+                try {
+                    if (this.audioChunks.length === 0) {
+                        this.setState('ready');
+                        return;
+                    }
 
-                // Decode audio using AudioContext at 16000Hz (required by Whisper)
-                const audioContext = new AudioContext({ sampleRate: 16000 });
-                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
-                const audioData = audioBuffer.getChannelData(0); // Float32Array
+                    const audioBlob = new Blob(this.audioChunks);
+                    const arrayBuffer = await audioBlob.arrayBuffer();
+                    
+                    if (arrayBuffer.byteLength === 0) {
+                        this.setState('ready');
+                        return;
+                    }
 
-                // Send to worker
-                this.worker?.postMessage({
-                    type: 'transcribe',
-                    audio: audioData
-                });
+                    // Decode audio using AudioContext at 16000Hz (required by Whisper)
+                    const audioContext = new AudioContext({ sampleRate: 16000 });
+                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+                    const audioData = audioBuffer.getChannelData(0); // Float32Array
+
+                    // Send to worker
+                    this.worker?.postMessage({
+                        type: 'transcribe',
+                        audio: audioData
+                    });
+                } catch (error) {
+                    console.error('[WhisperSTT] Failed to process audio', error);
+                    this.setState('ready');
+                }
             };
 
             this.mediaRecorder.start();
@@ -146,6 +159,9 @@ export class WhisperSTT {
     toggle() {
         if (this.state === 'listening') {
             this.stop();
+        } else if (this.state === 'loading' || this.state === 'processing') {
+            // Ignore clicks while loading or processing to prevent getting stuck
+            console.log('[WhisperSTT] Ignoring toggle during ' + this.state);
         } else {
             this.start();
         }

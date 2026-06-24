@@ -13,6 +13,6 @@ export default defineConfig({
                 extend: true,
             },
         },
-        minify: 'terser',
+        minify: 'esbuild',
     },
 });

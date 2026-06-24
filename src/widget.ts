@@ -843,6 +843,18 @@ export class Widget {
         }
     }
 
+    private showStatus(message: string, type: 'info' | 'error' = 'info'): void {
+        if (!this.inlineStatus) return;
+        this.inlineStatus.textContent = message;
+        this.inlineStatus.style.display = message ? 'block' : 'none';
+        
+        if (type === 'error') {
+            this.inlineStatus.classList.add('error');
+        } else {
+            this.inlineStatus.classList.remove('error');
+        }
+    }
+
     private updateMicButton(): void {
         if (!this.micButton) return;
 
