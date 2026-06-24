@@ -3,7 +3,7 @@
  */
 
 import type { WidgetConfig } from './index';
-import { SpeechToText, STTState } from './tts/stt';
+import { WhisperSTT, WhisperSTTState as STTState } from './tts/whisper-stt';
 import DOMPurify from 'dompurify';
 
 interface Message {
@@ -40,7 +40,7 @@ export class Widget {
     private messages: Message[] = [];
     private isOpen = false;
     private isTyping = false;
-    private stt: SpeechToText;
+    private stt: WhisperSTT;
     private micButton: HTMLButtonElement | null = null;
     private unreadCount = 0;  // Track unread messages for badge
     private badge: HTMLElement | null = null;
@@ -68,9 +68,16 @@ export class Widget {
         this.micButton = this.container.querySelector('.ai-widget-mic');
 
         // Initialize STT (Speech-to-Text)
-        this.stt = new SpeechToText();
+        this.stt = new WhisperSTT('./whisper.worker.ts');
         this.stt.setOnResult(this.handleSTTResult.bind(this));
         this.stt.setOnStateChange(this.handleSTTStateChange.bind(this));
+        this.stt.setOnProgress((progress) => {
+            if (progress >= 100) {
+                this.showStatus('Initializing model... (this takes a moment)', 'info');
+            } else {
+                this.showStatus(`Downloading Whisper STT model... ${Math.round(progress)}%`, 'info');
+            }
+        });
 
         this.setupEventListeners();
         this.addWelcomeMessage();
@@ -794,10 +801,10 @@ export class Widget {
 
     // STT (Speech-to-Text) methods
     private toggleMic(): void {
-        if (!this.stt.isSupported()) {
-            console.warn('[Widget] STT not supported in this browser');
-            return;
-        }
+        // if (!this.stt.isSupported()) {
+        //     console.warn('[Widget] STT not supported in this browser');
+        //     return;
+        // }
         this.stt.toggle();
     }
 
@@ -822,6 +829,18 @@ export class Widget {
 
     private handleSTTStateChange(state: STTState): void {
         this.updateMicButton();
+        if (state === 'loading') {
+            this.showStatus('Downloading Whisper STT model (~45MB)...', 'info');
+        } else if (state === 'ready') {
+            this.showStatus('Whisper STT ready', 'info');
+            setTimeout(() => this.showStatus(''), 2000);
+        } else if (state === 'listening') {
+            this.showStatus('Listening...', 'info');
+        } else if (state === 'processing') {
+            this.showStatus('Processing audio...', 'info');
+        } else if (state === 'error' || state === 'idle') {
+            this.showStatus('');
+        }
     }
 
     private updateMicButton(): void {
