@@ -531,6 +531,12 @@ export class Widget {
                     }
                     break;
 
+                case 'sources':
+                    if (response.sources && response.sources.length > 0) {
+                        this.renderSourcesForLastMessage(response.sources);
+                    }
+                    break;
+
                 case 'done':
                     this.finishTyping();
                     if (response.sources && response.sources.length > 0) {
@@ -729,12 +735,15 @@ export class Widget {
                 sourcesEl.innerHTML = DOMPurify.sanitize(`
                     <div class="ai-widget-sources-title">Sources:</div>
                     <div class="ai-widget-sources-list">
-                        ${sources.map(source => `
-                            <a href="${source.url}" target="_blank" rel="noopener noreferrer" class="ai-widget-source-pill">
-                                <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ai-widget-source-icon"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
-                                <span>${source.title}</span>
-                            </a>
-                        `).join('')}
+                        ${sources.map(source => {
+                            const url = source.url.startsWith('/') ? `${this.config.endpoint}${source.url}` : source.url;
+                            return `
+                                <a href="${url}" target="_blank" rel="noopener noreferrer" class="ai-widget-source-pill">
+                                    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="ai-widget-source-icon"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path></svg>
+                                    <span>${source.title}</span>
+                                </a>
+                            `;
+                        }).join('')}
                     </div>
                 `, { ALLOWED_TAGS: ['div', 'a', 'span', 'svg', 'path'], ALLOWED_ATTR: ['class', 'href', 'target', 'rel', 'width', 'height', 'viewBox', 'fill', 'stroke', 'stroke-width', 'stroke-linecap', 'stroke-linejoin', 'd'] });
                 el.appendChild(sourcesEl);
