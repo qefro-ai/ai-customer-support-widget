@@ -359,7 +359,8 @@ export function injectStyles(config: WidgetConfig): void {
 
     .ai-widget-typing {
       display: flex;
-      gap: 4px;
+      align-items: center;
+      gap: 8px;
       padding: 12px 16px;
       background: var(--ai-bg-secondary);
       border-radius: 16px;
@@ -367,19 +368,25 @@ export function injectStyles(config: WidgetConfig): void {
       align-self: flex-start;
     }
 
-    .ai-widget-typing span {
-      width: 8px;
-      height: 8px;
+    .ai-widget-typing-dots {
+      display: flex;
+      gap: 4px;
+      align-items: center;
+    }
+
+    .ai-widget-typing-dots span {
+      width: 6px;
+      height: 6px;
       background: var(--ai-text-secondary);
       border-radius: 50%;
       animation: ai-typing 1.4s infinite;
     }
 
-    .ai-widget-typing span:nth-child(2) {
+    .ai-widget-typing-dots span:nth-child(2) {
       animation-delay: 0.2s;
     }
 
-    .ai-widget-typing span:nth-child(3) {
+    .ai-widget-typing-dots span:nth-child(3) {
       animation-delay: 0.4s;
     }
 
@@ -397,20 +404,7 @@ export function injectStyles(config: WidgetConfig): void {
     .ai-widget-status-text {
       color: var(--ai-text-secondary);
       font-size: 13px;
-      margin-right: 8px;
-      align-self: center;
-    }
-
-    .ai-widget-typing span:nth-child(2) {
-      animation-delay: 0.2s;
-    }
-
-    .ai-widget-typing span:nth-child(3) {
-      animation-delay: 0.4s;
-    }
-
-    .ai-widget-typing span:nth-child(4) {
-      animation-delay: 0.6s;
+      font-style: italic;
     }
 
     .ai-widget-input-container {

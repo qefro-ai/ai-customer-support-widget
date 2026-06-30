@@ -1,7 +1,5 @@
-import { pipeline, env } from '@huggingface/transformers';
-
-// Disable local models to ensure we fetch from Hugging Face
-env.allowLocalModels = false;
+let pipeline: any;
+let env: any;
 
 class PipelineSingleton {
     static task = 'automatic-speech-recognition' as const;
@@ -9,6 +7,13 @@ class PipelineSingleton {
     static instance: any = null;
 
     static async getInstance(progress_callback: any) {
+        if (!pipeline) {
+            const hf = await import('https://cdn.jsdelivr.net/npm/@huggingface/transformers@4.2.0');
+            pipeline = hf.pipeline;
+            env = hf.env;
+            env.allowLocalModels = false;
+        }
+
         if (this.instance === null) {
             this.instance = await pipeline(this.task, this.model, {
                 progress_callback,

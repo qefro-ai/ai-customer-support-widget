@@ -780,15 +780,32 @@ export class Widget {
         return DOMPurify.sanitize(result, { ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'br', 'a', 'ul', 'li'], ALLOWED_ATTR: ['href', 'target', 'rel'] });
     }
 
+    private typingInterval: number | null = null;
+
     private showTypingIndicator(): void {
         const indicator = document.createElement('div');
         indicator.className = 'ai-widget-typing';
-        indicator.innerHTML = '<span></span><span></span><span></span>';
+        indicator.innerHTML = `
+            <div class="ai-widget-status-text">Thinking...</div>
+            <div class="ai-widget-typing-dots"><span></span><span></span><span></span></div>
+        `;
         this.messagesContainer.appendChild(indicator);
         this.scrollToBottom();
+
+        const statuses = ['Thinking...', 'Analyzing knowledge base...', 'Reviewing context...', 'Generating response...'];
+        let i = 0;
+        this.typingInterval = window.setInterval(() => {
+            i = (i + 1) % statuses.length;
+            const textEl = indicator.querySelector('.ai-widget-status-text');
+            if (textEl) textEl.textContent = statuses[i];
+        }, 3500);
     }
 
     private hideTypingIndicator(): void {
+        if (this.typingInterval !== null) {
+            clearInterval(this.typingInterval);
+            this.typingInterval = null;
+        }
         const indicator = this.messagesContainer.querySelector('.ai-widget-typing');
         indicator?.remove();
     }
