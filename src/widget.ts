@@ -4,6 +4,7 @@
 
 import type { WidgetConfig } from './index';
 import { WhisperSTT, WhisperSTTState as STTState } from './tts/whisper-stt';
+import { TTSController } from './tts/index';
 import DOMPurify from 'dompurify';
 
 interface Message {
@@ -41,7 +42,9 @@ export class Widget {
     private isOpen = false;
     private isTyping = false;
     private stt: WhisperSTT;
+    private tts: TTSController;
     private micButton: HTMLButtonElement | null = null;
+    private ttsButton: HTMLButtonElement | null = null;
     private unreadCount = 0;  // Track unread messages for badge
     private badge: HTMLElement | null = null;
     private settings: {
@@ -79,6 +82,13 @@ export class Widget {
             }
         });
 
+        // Initialize TTS
+        this.tts = new TTSController({
+            apiUrl: this.config.endpoint,
+            apiToken: this.config.token,
+            workspaceId: this.config.workspaceId || null
+        });
+        
         this.setupEventListeners();
         this.addWelcomeMessage();
         this.updateMicButton();
@@ -112,6 +122,13 @@ export class Widget {
         <div class="ai-widget-header">
           <span>AI Assistant</span>
           <div class="ai-widget-header-actions">
+            <button class="ai-widget-tts-trigger" aria-label="Toggle Voice" title="Toggle Voice">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07"></path>
+                <path d="M19.07 4.93a10 10 0 0 1 0 14.14"></path>
+              </svg>
+            </button>
             <button class="ai-widget-handoff-trigger" aria-label="Contact Support" title="Contact Support">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M3 18v-6a9 9 0 0 1 18 0v6"></path>
@@ -169,6 +186,25 @@ export class Widget {
 
         const close = this.container.querySelector('.ai-widget-close')!;
         close.addEventListener('click', () => this.close());
+
+        const ttsTrigger = this.container.querySelector('.ai-widget-tts-trigger')!;
+        this.ttsButton = ttsTrigger as HTMLButtonElement;
+        ttsTrigger.addEventListener('click', async () => {
+            const enabled = await this.tts.toggle();
+            if (enabled) {
+                this.ttsButton?.classList.add('active');
+                this.ttsButton!.style.color = 'var(--ai-primary)';
+            } else {
+                this.ttsButton?.classList.remove('active');
+                this.ttsButton!.style.color = 'currentColor';
+            }
+        });
+        
+        // Restore TTS button state if it was enabled from previous sessions
+        if (this.tts.isEnabled()) {
+            this.ttsButton.classList.add('active');
+            this.ttsButton.style.color = 'var(--ai-primary)';
+        }
 
         const handoffTrigger = this.container.querySelector('.ai-widget-handoff-trigger')!;
         handoffTrigger.addEventListener('click', () => this.renderHandoffOptions());
@@ -528,6 +564,7 @@ export class Widget {
                         }
                     } else {
                         this.appendToLastMessage(response.content!);
+                        this.tts.processText(response.content!);
                     }
                     break;
 
@@ -545,6 +582,7 @@ export class Widget {
                     if (response.messageId) {
                         this.renderFeedbackButtonsForLastMessage(response.messageId);
                     }
+                    this.tts.onResponseComplete();
                     const checkLastMsg = this.messages[this.messages.length - 1];
                     if (checkLastMsg && checkLastMsg.role === 'assistant' && 
                         checkLastMsg.content.includes("I don't have that specific information in my knowledge base.")) {
@@ -589,6 +627,7 @@ export class Widget {
         // Clear input
         this.input.value = '';
         this.input.style.height = 'auto';
+        this.tts.onUserMessage();
 
         // Show typing indicator
         this.isTyping = true;
@@ -666,6 +705,7 @@ export class Widget {
                         const data = JSON.parse(line.slice(6));
                         if (data.type === 'token') {
                             this.appendToLastMessage(data.content);
+                            this.tts.processText(data.content);
                         } else if (data.type === 'conversationId') {
                             this.conversationId = data.id;
                         } else if (data.type === 'done') {
@@ -673,6 +713,7 @@ export class Widget {
                             if (data.messageId) {
                                 this.renderFeedbackButtonsForLastMessage(data.messageId);
                             }
+                            this.tts.onResponseComplete();
                             const checkLastMsg = this.messages[this.messages.length - 1];
                             if (checkLastMsg && checkLastMsg.role === 'assistant' && 
                                 checkLastMsg.content.includes("I don't have that specific information in my knowledge base.")) {

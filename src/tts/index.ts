@@ -16,7 +16,7 @@ import { PiperWasmTTS, PiperModelId, PIPER_MODELS } from './piper-wasm';
 import { preprocessText } from './piper-types';
 
 export type TTSState = 'disabled' | 'loading' | 'ready' | 'speaking' | 'error';
-export type TTSEngineType = 'wasm' | 'webspeech' | 'none';
+export type TTSEngineType = 'api' | 'webspeech' | 'none';
 
 export interface TTSControllerConfig {
     /** Storage key for voice preference */
@@ -25,8 +25,14 @@ export interface TTSControllerConfig {
     modelId: PiperModelId;
     /** Auto-enable for accessibility */
     accessibilityAutoEnable: boolean;
-    /** Force Web Speech API (skip WASM) */
+    /** Force Web Speech API (skip API) */
     forceWebSpeech: boolean;
+    /** API URL */
+    apiUrl: string;
+    /** API Token */
+    apiToken: string;
+    /** Workspace ID */
+    workspaceId: string | null;
 }
 
 const DEFAULT_CONFIG: TTSControllerConfig = {
@@ -34,6 +40,9 @@ const DEFAULT_CONFIG: TTSControllerConfig = {
     modelId: 'en_lessac_medium',
     accessibilityAutoEnable: false,
     forceWebSpeech: false,
+    apiUrl: 'http://localhost:3000',
+    apiToken: '',
+    workspaceId: null,
 };
 
 /** TTS Engine interface */
@@ -94,39 +103,69 @@ class WebSpeechEngine implements ITTSEngine {
     }
 }
 
-/** WASM ONNX Piper implementation */
-class WasmEngine implements ITTSEngine {
-    private piper: PiperWasmTTS;
+/** API based engine (SuperTonic / VITS) */
+class ApiEngine implements ITTSEngine {
     private audioPlayer: AudioPlayer;
     private currentAudioResolve: (() => void) | null = null;
+    private apiUrl: string;
+    private apiToken: string;
+    private workspaceId: string | null;
 
-    constructor(modelId: PiperModelId, audioPlayer: AudioPlayer) {
-        this.piper = new PiperWasmTTS(modelId);
+    constructor(audioPlayer: AudioPlayer, apiUrl: string, apiToken: string, workspaceId: string | null) {
         this.audioPlayer = audioPlayer;
+        this.apiUrl = apiUrl;
+        this.apiToken = apiToken;
+        this.workspaceId = workspaceId;
     }
 
     async initialize(): Promise<void> {
-        await this.piper.initialize();
+        // Nothing to initialize on the client
     }
 
     async speak(text: string): Promise<void> {
-        const audioData = await this.piper.synthesize(text);
-        const sampleRate = this.piper.getSampleRate();
+        try {
+            const response = await fetch(`${this.apiUrl}/api/v1/widget/tts`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': `Bearer ${this.apiToken}`,
+                    ...(this.workspaceId ? { 'X-Workspace-ID': this.workspaceId } : {})
+                },
+                body: JSON.stringify({ text, lang: 'auto' })
+            });
 
-        return new Promise<void>((resolve) => {
-            this.currentAudioResolve = resolve;
-            this.audioPlayer.enqueue(audioData, sampleRate);
+            if (!response.ok) {
+                throw new Error(`TTS request failed with status: ${response.status}`);
+            }
 
-            // Resolve when audio finishes
-            const checkComplete = () => {
-                if (this.audioPlayer.getState() === 'idle') {
+            const arrayBuffer = await response.arrayBuffer();
+            
+            return new Promise<void>((resolve) => {
+                this.currentAudioResolve = resolve;
+                
+                const audioCtx = this.audioPlayer['audioCtx'] || new (window.AudioContext || (window as any).webkitAudioContext)();
+                
+                audioCtx.decodeAudioData(arrayBuffer, (decodedBuffer) => {
+                    // We need to enqueue raw float32 data
+                    const pcmData = decodedBuffer.getChannelData(0);
+                    this.audioPlayer.enqueue(pcmData, decodedBuffer.sampleRate);
+                    
+                    const checkComplete = () => {
+                        if (this.audioPlayer.getState() === 'idle') {
+                            resolve();
+                        } else {
+                            setTimeout(checkComplete, 100);
+                        }
+                    };
+                    checkComplete();
+                }, (e) => {
+                    console.error('Failed to decode TTS audio', e);
                     resolve();
-                } else {
-                    setTimeout(checkComplete, 100);
-                }
-            };
-            checkComplete();
-        });
+                });
+            });
+        } catch (error) {
+            console.error('[TTS ApiEngine] Error:', error);
+        }
     }
 
     stop(): void {
@@ -138,12 +177,10 @@ class WasmEngine implements ITTSEngine {
     }
 
     isSupported(): boolean {
-        return typeof WebAssembly !== 'undefined';
+        return true;
     }
 
-    dispose(): void {
-        this.piper.dispose();
-    }
+    dispose(): void {}
 }
 
 export class TTSController {
@@ -219,17 +256,17 @@ export class TTSController {
         try {
             await this.audioPlayer.initialize();
 
-            // Try WASM ONNX first (unless forced to WebSpeech)
-            if (!this.config.forceWebSpeech && typeof WebAssembly !== 'undefined') {
+            // Try API first (unless forced to WebSpeech)
+            if (!this.config.forceWebSpeech) {
                 try {
-                    console.log('[TTS] Initializing WASM ONNX engine...');
-                    const wasmEngine = new WasmEngine(this.config.modelId, this.audioPlayer);
-                    await wasmEngine.initialize();
-                    this.engine = wasmEngine;
-                    this.engineType = 'wasm';
-                    console.log('[TTS] WASM ONNX engine ready');
-                } catch (wasmError) {
-                    console.warn('[TTS] WASM failed, falling back to Web Speech:', wasmError);
+                    console.log('[TTS] Initializing API engine...');
+                    const apiEngine = new ApiEngine(this.audioPlayer, this.config.apiUrl, this.config.apiToken, this.config.workspaceId);
+                    await apiEngine.initialize();
+                    this.engine = apiEngine;
+                    this.engineType = 'api';
+                    console.log('[TTS] API engine ready');
+                } catch (apiError) {
+                    console.warn('[TTS] API engine failed, falling back to Web Speech:', apiError);
                 }
             }
 
