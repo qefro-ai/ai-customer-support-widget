@@ -596,7 +596,7 @@ export class Widget {
                     this.addMessage({
                         id: Date.now().toString(),
                         role: 'assistant',
-                        content: 'Sorry, an error occurred. Please try again.',
+                        content: 'Our AI is experiencing high volume. Please leave your email, or a human agent will be with you shortly.',
                         timestamp: new Date(),
                     });
                     break;
@@ -732,7 +732,7 @@ export class Widget {
             this.addMessage({
                 id: Date.now().toString(),
                 role: 'assistant',
-                content: 'Sorry, I could not process your request.',
+                content: 'Our AI is experiencing high volume. Please leave your email, or a human agent will be with you shortly.',
                 timestamp: new Date(),
             });
         }
