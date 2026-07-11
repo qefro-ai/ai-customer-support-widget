@@ -16,7 +16,8 @@ export interface SentenceBufferConfig {
 
 const DEFAULT_CONFIG: SentenceBufferConfig = {
     maxWordsPerSentence: 20,
-    flushTimeout: 3000,
+    // Lower flush timeout → earlier first audio when stream lacks punctuation
+    flushTimeout: 800,
     unsafePatterns: [],
 };
 

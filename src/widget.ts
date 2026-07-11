@@ -76,7 +76,7 @@ export class Widget {
 
         // Initialize STT (Speech-to-Text)
         this.stt = new WhisperSTT('./whisper.worker.ts');
-        this.stt.setOnResult(this.handleSTTResult.bind(this));
+        this.stt.setOnResult((transcript) => this.handleSTTResult(transcript, true));
         this.stt.setOnStateChange(this.handleSTTStateChange.bind(this));
         this.stt.setOnProgress((progress) => {
             if (progress >= 100) {
@@ -940,7 +940,7 @@ export class Widget {
     private handleSTTStateChange(state: STTState): void {
         this.updateMicButton();
         if (state === 'loading') {
-            this.showStatus('Downloading Whisper STT model (~45MB)...', 'info');
+            this.showStatus('Downloading Whisper STT model (~41MB LiteRT)...', 'info');
         } else if (state === 'ready') {
             this.showStatus('Whisper STT ready', 'info');
             setTimeout(() => this.showStatus(''), 2000);

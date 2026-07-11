@@ -1,37 +1,28 @@
 /**
  * TTS Controller - Main orchestrator for B2B Text-to-Speech
- * 
- * Features:
- * - WASM ONNX TTS with Piper (lazy loaded)
- * - Fallback to Web Speech API if WASM fails
- * - Sentence buffering with B2B safety filters
- * - Web Audio playback with queue
- * - Interruption on new user message
- * - User preference persistence
+ *
+ * Optimizations:
+ * - Prefetch next sentence while current audio plays (pipeline parallelism)
+ * - Client-side WAV LRU cache
+ * - Event-based playback wait (no 100ms polling)
+ * - Faster sentence flush for first-audio latency
  */
 
 import { SentenceBuffer } from './sentence-buffer';
 import { AudioPlayer } from './audio-player';
-import { PiperWasmTTS, PiperModelId, PIPER_MODELS } from './piper-wasm';
+import { PiperModelId } from './piper-wasm';
 import { preprocessText } from './piper-types';
 
 export type TTSState = 'disabled' | 'loading' | 'ready' | 'speaking' | 'error';
 export type TTSEngineType = 'api' | 'webspeech' | 'none';
 
 export interface TTSControllerConfig {
-    /** Storage key for voice preference */
     storageKey: string;
-    /** Piper model to use */
     modelId: PiperModelId;
-    /** Auto-enable for accessibility */
     accessibilityAutoEnable: boolean;
-    /** Force Web Speech API (skip API) */
     forceWebSpeech: boolean;
-    /** API URL */
     apiUrl: string;
-    /** API Token */
     apiToken: string;
-    /** Workspace ID */
     workspaceId: string | null;
 }
 
@@ -45,14 +36,18 @@ const DEFAULT_CONFIG: TTSControllerConfig = {
     workspaceId: null,
 };
 
-/** TTS Engine interface */
+const CLIENT_TTS_CACHE_MAX = 32;
+
 interface ITTSEngine {
     speak(text: string): Promise<void>;
+    /** Fetch audio without waiting for playback (for prefetch) */
+    fetchAudio?(text: string): Promise<ArrayBuffer>;
+    /** Enqueue pre-fetched audio and wait until that clip finishes */
+    playAudio?(buffer: ArrayBuffer): Promise<void>;
     stop(): void;
     isSupported(): boolean;
 }
 
-/** Web Speech API implementation */
 class WebSpeechEngine implements ITTSEngine {
     private synth: SpeechSynthesis;
     private voice: SpeechSynthesisVoice | null = null;
@@ -103,13 +98,12 @@ class WebSpeechEngine implements ITTSEngine {
     }
 }
 
-/** API based engine (SuperTonic / VITS) */
 class ApiEngine implements ITTSEngine {
     private audioPlayer: AudioPlayer;
-    private currentAudioResolve: (() => void) | null = null;
     private apiUrl: string;
     private apiToken: string;
     private workspaceId: string | null;
+    private cache = new Map<string, ArrayBuffer>();
 
     constructor(audioPlayer: AudioPlayer, apiUrl: string, apiToken: string, workspaceId: string | null) {
         this.audioPlayer = audioPlayer;
@@ -118,51 +112,64 @@ class ApiEngine implements ITTSEngine {
         this.workspaceId = workspaceId;
     }
 
-    async initialize(): Promise<void> {
-        // Nothing to initialize on the client
+    async initialize(): Promise<void> {}
+
+    private cacheGet(text: string): ArrayBuffer | undefined {
+        const hit = this.cache.get(text);
+        if (hit) {
+            // LRU touch
+            this.cache.delete(text);
+            this.cache.set(text, hit);
+        }
+        return hit;
+    }
+
+    private cachePut(text: string, buf: ArrayBuffer): void {
+        this.cache.set(text, buf);
+        while (this.cache.size > CLIENT_TTS_CACHE_MAX) {
+            const oldest = this.cache.keys().next().value;
+            if (oldest !== undefined) this.cache.delete(oldest);
+        }
+    }
+
+    async fetchAudio(text: string): Promise<ArrayBuffer> {
+        const cached = this.cacheGet(text);
+        if (cached) return cached.slice(0);
+
+        const t0 = performance.now();
+        const response = await fetch(`${this.apiUrl}/api/v1/widget/tts`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'Authorization': `Bearer ${this.apiToken}`,
+                ...(this.workspaceId ? { 'X-Workspace-ID': this.workspaceId } : {})
+            },
+            body: JSON.stringify({ text, lang: 'auto' })
+        });
+
+        if (!response.ok) {
+            throw new Error(`TTS request failed with status: ${response.status}`);
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const latency = response.headers.get('X-TTS-Latency-Ms');
+        console.debug(
+            `[TTS] fetch ${text.length} chars in ${(performance.now() - t0).toFixed(0)}ms` +
+            (latency ? ` (server ${latency}ms)` : '')
+        );
+        this.cachePut(text, arrayBuffer.slice(0));
+        return arrayBuffer;
+    }
+
+    async playAudio(buffer: ArrayBuffer): Promise<void> {
+        await this.audioPlayer.enqueueWav(buffer);
+        await this.audioPlayer.waitUntilIdle();
     }
 
     async speak(text: string): Promise<void> {
         try {
-            const response = await fetch(`${this.apiUrl}/api/v1/widget/tts`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': `Bearer ${this.apiToken}`,
-                    ...(this.workspaceId ? { 'X-Workspace-ID': this.workspaceId } : {})
-                },
-                body: JSON.stringify({ text, lang: 'auto' })
-            });
-
-            if (!response.ok) {
-                throw new Error(`TTS request failed with status: ${response.status}`);
-            }
-
-            const arrayBuffer = await response.arrayBuffer();
-            
-            return new Promise<void>((resolve) => {
-                this.currentAudioResolve = resolve;
-                
-                const audioCtx = this.audioPlayer['audioCtx'] || new (window.AudioContext || (window as any).webkitAudioContext)();
-                
-                audioCtx.decodeAudioData(arrayBuffer, (decodedBuffer) => {
-                    // We need to enqueue raw float32 data
-                    const pcmData = decodedBuffer.getChannelData(0);
-                    this.audioPlayer.enqueue(pcmData, decodedBuffer.sampleRate);
-                    
-                    const checkComplete = () => {
-                        if (this.audioPlayer.getState() === 'idle') {
-                            resolve();
-                        } else {
-                            setTimeout(checkComplete, 100);
-                        }
-                    };
-                    checkComplete();
-                }, (e) => {
-                    console.error('Failed to decode TTS audio', e);
-                    resolve();
-                });
-            });
+            const arrayBuffer = await this.fetchAudio(text);
+            await this.playAudio(arrayBuffer);
         } catch (error) {
             console.error('[TTS ApiEngine] Error:', error);
         }
@@ -170,17 +177,15 @@ class ApiEngine implements ITTSEngine {
 
     stop(): void {
         this.audioPlayer.stop();
-        if (this.currentAudioResolve) {
-            this.currentAudioResolve();
-            this.currentAudioResolve = null;
-        }
     }
 
     isSupported(): boolean {
         return true;
     }
 
-    dispose(): void {}
+    dispose(): void {
+        this.cache.clear();
+    }
 }
 
 export class TTSController {
@@ -194,10 +199,13 @@ export class TTSController {
     private speakQueue: string[] = [];
     private isSpeaking = false;
     private onStateChange: ((state: TTSState) => void) | null = null;
+    private prefetchPromise: Promise<ArrayBuffer | null> | null = null;
+    private prefetchText: string | null = null;
 
     constructor(config: Partial<TTSControllerConfig> = {}) {
         this.config = { ...DEFAULT_CONFIG, ...config };
-        this.sentenceBuffer = new SentenceBuffer();
+        // Faster flush → earlier first audio when LLM streams without punctuation
+        this.sentenceBuffer = new SentenceBuffer({ flushTimeout: 800 });
         this.audioPlayer = new AudioPlayer();
 
         this.sentenceBuffer.setOnSentence(this.handleSentence.bind(this));
@@ -205,17 +213,14 @@ export class TTSController {
         this.setupVisibilityHandler();
     }
 
-    /** Set state change callback */
     setOnStateChange(callback: (state: TTSState) => void): void {
         this.onStateChange = callback;
     }
 
-    /** Get current engine type */
     getEngineType(): 'wasm' | 'webspeech' | 'none' {
-        return this.engineType;
+        return this.engineType as 'wasm' | 'webspeech' | 'none';
     }
 
-    /** Enable/disable voice */
     async setEnabled(enabled: boolean): Promise<void> {
         this.enabled = enabled;
         this.savePreference();
@@ -228,23 +233,19 @@ export class TTSController {
         }
     }
 
-    /** Toggle voice on/off */
     async toggle(): Promise<boolean> {
         await this.setEnabled(!this.enabled);
         return this.enabled;
     }
 
-    /** Check if voice is enabled */
     isEnabled(): boolean {
         return this.enabled;
     }
 
-    /** Get current state */
     getState(): TTSState {
         return this.state;
     }
 
-    /** Initialize TTS engine (lazy loading) */
     private async initialize(): Promise<void> {
         if (this.engine) {
             this.setState('ready');
@@ -256,11 +257,15 @@ export class TTSController {
         try {
             await this.audioPlayer.initialize();
 
-            // Try API first (unless forced to WebSpeech)
             if (!this.config.forceWebSpeech) {
                 try {
                     console.log('[TTS] Initializing API engine...');
-                    const apiEngine = new ApiEngine(this.audioPlayer, this.config.apiUrl, this.config.apiToken, this.config.workspaceId);
+                    const apiEngine = new ApiEngine(
+                        this.audioPlayer,
+                        this.config.apiUrl,
+                        this.config.apiToken,
+                        this.config.workspaceId
+                    );
                     await apiEngine.initialize();
                     this.engine = apiEngine;
                     this.engineType = 'api';
@@ -270,7 +275,6 @@ export class TTSController {
                 }
             }
 
-            // Fallback to Web Speech API
             if (!this.engine) {
                 console.log('[TTS] Using Web Speech API fallback');
                 const webEngine = new WebSpeechEngine();
@@ -279,7 +283,6 @@ export class TTSController {
                     throw new Error('No TTS engine available');
                 }
 
-                // Wait for voices to load
                 await new Promise<void>(resolve => {
                     if (window.speechSynthesis.getVoices().length > 0) {
                         resolve();
@@ -301,22 +304,33 @@ export class TTSController {
         }
     }
 
-    /** Process streaming text */
     processText(text: string): void {
         if (!this.enabled) return;
         this.sentenceBuffer.append(text);
     }
 
-    /** Handle approved sentence from buffer */
     private handleSentence(sentence: string): void {
         if (!this.enabled || !this.engine) return;
 
         const processed = preprocessText(sentence);
         this.speakQueue.push(processed);
+        // Kick off prefetch for the head of queue immediately
+        this.ensurePrefetch();
         this.processQueue();
     }
 
-    /** Process speech queue */
+    private ensurePrefetch(): void {
+        if (!this.engine?.fetchAudio || this.speakQueue.length === 0) return;
+        const next = this.speakQueue[0];
+        if (this.prefetchText === next && this.prefetchPromise) return;
+
+        this.prefetchText = next;
+        this.prefetchPromise = this.engine.fetchAudio(next).catch((err) => {
+            console.error('[TTS] Prefetch failed:', err);
+            return null;
+        });
+    }
+
     private async processQueue(): Promise<void> {
         if (this.isSpeaking || this.speakQueue.length === 0) return;
 
@@ -325,8 +339,38 @@ export class TTSController {
 
         while (this.speakQueue.length > 0 && this.enabled) {
             const text = this.speakQueue.shift()!;
+
+            // Use in-flight prefetch if it matches this sentence
+            let audioPromise: Promise<ArrayBuffer | null>;
+            if (this.prefetchText === text && this.prefetchPromise) {
+                audioPromise = this.prefetchPromise;
+            } else if (this.engine!.fetchAudio) {
+                audioPromise = this.engine!.fetchAudio(text).catch(() => null);
+            } else {
+                audioPromise = Promise.resolve(null);
+            }
+
+            // Prefetch next sentence while current fetch/playback runs
+            if (this.speakQueue.length > 0 && this.engine!.fetchAudio) {
+                const upcoming = this.speakQueue[0];
+                this.prefetchText = upcoming;
+                this.prefetchPromise = this.engine!.fetchAudio(upcoming).catch(() => null);
+            } else {
+                this.prefetchText = null;
+                this.prefetchPromise = null;
+            }
+
             try {
-                await this.engine!.speak(text);
+                if (this.engine!.playAudio) {
+                    const buffer = await audioPromise;
+                    if (buffer) {
+                        await this.engine!.playAudio(buffer);
+                    } else {
+                        await this.engine!.speak(text);
+                    }
+                } else {
+                    await this.engine!.speak(text);
+                }
             } catch (error) {
                 console.error('[TTS] Speak error:', error);
             }
@@ -338,48 +382,43 @@ export class TTSController {
         }
     }
 
-    /** Stop current speech and clear queue */
     stop(): void {
         this.speakQueue = [];
+        this.prefetchPromise = null;
+        this.prefetchText = null;
         this.engine?.stop();
         this.audioPlayer.stop();
         this.isSpeaking = false;
     }
 
-    /** Reset for new conversation/message */
     reset(): void {
         this.stop();
         this.sentenceBuffer.reset();
     }
 
-    /** Called when user sends a new message */
     onUserMessage(): void {
         this.reset();
     }
 
-    /** Called when assistant response is complete */
     onResponseComplete(): void {
         this.sentenceBuffer.flush();
     }
 
-    /** Speak complete text (non-streaming, for full responses) */
     async speakText(text: string): Promise<void> {
         if (!this.enabled || !text.trim()) return;
 
-        // Initialize engine if needed
         if (!this.engine) {
             await this.initialize();
         }
 
         if (!this.engine) return;
 
-        // Preprocess and speak the full text
         const processed = preprocessText(text);
         this.speakQueue.push(processed);
+        this.ensurePrefetch();
         this.processQueue();
     }
 
-    /** Load preference from storage */
     private loadPreference(): void {
         try {
             const saved = localStorage.getItem(this.config.storageKey);
@@ -394,14 +433,12 @@ export class TTSController {
         }
     }
 
-    /** Save preference to storage */
     private savePreference(): void {
         try {
             localStorage.setItem(this.config.storageKey, String(this.enabled));
         } catch { }
     }
 
-    /** Handle tab visibility changes */
     private setupVisibilityHandler(): void {
         document.addEventListener('visibilitychange', () => {
             if (document.hidden && this.state === 'speaking') {
@@ -412,7 +449,6 @@ export class TTSController {
         });
     }
 
-    /** Update state and notify */
     private setState(state: TTSState): void {
         if (this.state !== state) {
             this.state = state;
@@ -420,12 +456,11 @@ export class TTSController {
         }
     }
 
-    /** Cleanup resources */
     dispose(): void {
         this.stop();
         this.audioPlayer.dispose();
         if (this.engine && 'dispose' in this.engine) {
-            (this.engine as WasmEngine).dispose();
+            (this.engine as ApiEngine).dispose();
         }
         this.engine = null;
     }

@@ -1,8 +1,8 @@
 /**
  * Audio Player for B2B TTS
- * 
- * Handles Web Audio API playback with queue management,
- * interruption support, and graceful pause/resume.
+ *
+ * Web Audio playback with queue management, interruption support,
+ * and event-based idle wait (no polling).
  */
 
 export type AudioState = 'idle' | 'loading' | 'playing' | 'paused';
@@ -27,14 +27,12 @@ export class AudioPlayer {
     private config: AudioPlayerConfig;
     private state: AudioState = 'idle';
     private onStateChange: ((state: AudioState) => void) | null = null;
+    private idleWaiters: Array<() => void> = [];
 
     constructor(config: Partial<AudioPlayerConfig> = {}) {
         this.config = { ...DEFAULT_CONFIG, ...config };
     }
 
-    /**
-     * Initialize audio context (must be called after user interaction)
-     */
     async initialize(): Promise<void> {
         if (this.audioContext) return;
 
@@ -44,16 +42,15 @@ export class AudioPlayer {
         this.gainNode.connect(this.audioContext.destination);
     }
 
-    /**
-     * Set state change callback
-     */
+    /** Expose context for decode without creating a second AudioContext */
+    getContext(): AudioContext | null {
+        return this.audioContext;
+    }
+
     setOnStateChange(callback: (state: AudioState) => void): void {
         this.onStateChange = callback;
     }
 
-    /**
-     * Set volume (0-1)
-     */
     setVolume(volume: number): void {
         this.config.volume = Math.max(0, Math.min(1, volume));
         if (this.gainNode) {
@@ -61,28 +58,49 @@ export class AudioPlayer {
         }
     }
 
-    /**
-     * Add audio data to queue and start playing
-     */
     async enqueue(audioData: Float32Array, sampleRate: number = 22050): Promise<void> {
         if (!this.audioContext) {
             await this.initialize();
         }
 
         const audioBuffer = this.audioContext!.createBuffer(1, audioData.length, sampleRate);
+        // Copy once into AudioBuffer; avoid retaining the source Float32Array longer than needed
         audioBuffer.getChannelData(0).set(audioData);
 
         this.queue.push(audioBuffer);
 
-        // Start playing if idle
         if (this.state === 'idle') {
             this.playNext();
         }
     }
 
     /**
-     * Play next item in queue
+     * Decode and enqueue raw audio bytes (e.g. WAV from TTS API).
+     * Uses the player's own AudioContext so sample rates stay consistent.
      */
+    async enqueueWav(arrayBuffer: ArrayBuffer): Promise<void> {
+        if (!this.audioContext) {
+            await this.initialize();
+        }
+
+        const decoded = await this.audioContext!.decodeAudioData(arrayBuffer.slice(0));
+        this.queue.push(decoded);
+
+        if (this.state === 'idle') {
+            this.playNext();
+        }
+    }
+
+    /** Resolve when queue drains and playback is idle */
+    waitUntilIdle(): Promise<void> {
+        if (this.state === 'idle' && this.queue.length === 0 && !this.currentSource) {
+            return Promise.resolve();
+        }
+        return new Promise((resolve) => {
+            this.idleWaiters.push(resolve);
+        });
+    }
+
     private playNext(): void {
         if (this.queue.length === 0) {
             this.setState('idle');
@@ -93,13 +111,9 @@ export class AudioPlayer {
         this.playBuffer(audioBuffer);
     }
 
-    /**
-     * Play audio buffer
-     */
     private playBuffer(buffer: AudioBuffer): void {
         if (!this.audioContext || !this.gainNode) return;
 
-        // Resume context if suspended (browser autoplay policy)
         if (this.audioContext.state === 'suspended') {
             this.audioContext.resume();
         }
@@ -118,14 +132,11 @@ export class AudioPlayer {
         this.setState('playing');
     }
 
-    /**
-     * Stop current playback and clear queue
-     */
     stop(): void {
         if (this.currentSource) {
             try {
                 this.currentSource.stop();
-            } catch (e) {
+            } catch {
                 // Already stopped
             }
             this.currentSource = null;
@@ -134,9 +145,6 @@ export class AudioPlayer {
         this.setState('idle');
     }
 
-    /**
-     * Pause playback (for tab visibility changes)
-     */
     pause(): void {
         if (this.audioContext && this.state === 'playing') {
             this.audioContext.suspend();
@@ -144,9 +152,6 @@ export class AudioPlayer {
         }
     }
 
-    /**
-     * Resume playback
-     */
     resume(): void {
         if (this.audioContext && this.state === 'paused') {
             this.audioContext.resume();
@@ -154,42 +159,30 @@ export class AudioPlayer {
         }
     }
 
-    /**
-     * Check if currently playing
-     */
     isPlaying(): boolean {
         return this.state === 'playing';
     }
 
-    /**
-     * Get current state
-     */
     getState(): AudioState {
         return this.state;
     }
 
-    /**
-     * Get queue length
-     */
     getQueueLength(): number {
         return this.queue.length;
     }
 
-    /**
-     * Update state and notify
-     */
     private setState(state: AudioState): void {
         if (this.state !== state) {
             this.state = state;
-            if (this.onStateChange) {
-                this.onStateChange(state);
-            }
+            this.onStateChange?.(state);
+        }
+        if (state === 'idle' && this.queue.length === 0 && !this.currentSource) {
+            const waiters = this.idleWaiters;
+            this.idleWaiters = [];
+            for (const w of waiters) w();
         }
     }
 
-    /**
-     * Cleanup resources
-     */
     dispose(): void {
         this.stop();
         if (this.audioContext) {

@@ -1,6 +1,12 @@
 import { defineConfig } from 'vite';
 
 export default defineConfig({
+    worker: {
+        format: 'es',
+    },
+    optimizeDeps: {
+        exclude: ['@litertjs/core'],
+    },
     build: {
         lib: {
             entry: 'src/index.ts',
