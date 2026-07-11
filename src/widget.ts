@@ -20,7 +20,7 @@ interface Source {
 }
 
 interface ChatResponse {
-    type: 'token' | 'conversationId' | 'done' | 'error' | 'status';
+    type: 'token' | 'conversationId' | 'done' | 'error' | 'status' | 'sources';
     content?: string;
     id?: string;
     messageId?: string;
@@ -37,6 +37,10 @@ export class Widget {
     private sendButton: HTMLButtonElement;
     private inlineStatus: HTMLElement;
     private ws: WebSocket | null = null;
+    private connectionPromise: Promise<void> | null = null;
+    private reconnectTimer: number | null = null;
+    private reconnectAttempt = 0;
+    private renderFrame: number | null = null;
     private conversationId: string | null = null;
     private messages: Message[] = [];
     private isOpen = false;
@@ -507,35 +511,53 @@ export class Widget {
 
     private async connectWebSocket(): Promise<void> {
         if (this.ws?.readyState === WebSocket.OPEN) return;
+        if (this.connectionPromise) return this.connectionPromise;
 
         const wsUrl = this.config.endpoint
             .replace('https://', 'wss://')
             .replace('http://', 'ws://');
 
-        this.ws = new WebSocket(`${wsUrl}/ws/chat?token=${this.config.token}`);
+        this.connectionPromise = new Promise<void>((resolve, reject) => {
+            const ws = new WebSocket(`${wsUrl}/ws/chat?token=${encodeURIComponent(this.config.token)}`);
+            this.ws = ws;
 
-        this.ws.onopen = () => {
-            console.log('AI Widget: WebSocket connected');
-            this.setInlineStatus(null);
-        };
+            ws.onopen = () => {
+                this.reconnectAttempt = 0;
+                this.connectionPromise = null;
+                this.setInlineStatus(null);
+                resolve();
+            };
 
-        this.ws.onmessage = (event) => {
-            this.handleWebSocketMessage(event.data);
-        };
+            ws.onmessage = (event) => {
+                this.handleWebSocketMessage(event.data);
+            };
 
-        this.ws.onerror = (error) => {
-            console.error('AI Widget: WebSocket error', error);
-            this.setInlineStatus('Live connection looks unstable. Messages will retry over HTTP if needed.', 'info');
-        };
+            ws.onerror = () => {
+                this.setInlineStatus('Live connection looks unstable. Messages will retry over HTTP if needed.', 'info');
+                this.connectionPromise = null;
+                reject(new Error('WebSocket connection failed'));
+            };
 
-        this.ws.onclose = () => {
-            console.log('AI Widget: WebSocket closed');
-            if (this.isTyping) {
-                this.finishTyping();
-                this.setInlineStatus('Connection closed before the reply finished. Please try sending again.', 'error');
-            }
-            this.ws = null;
-        };
+            ws.onclose = () => {
+                this.connectionPromise = null;
+                this.ws = null;
+                if (this.isTyping) {
+                    this.finishTyping();
+                    this.setInlineStatus('Connection closed before the reply finished. Please try sending again.', 'error');
+                }
+                this.scheduleReconnect();
+            };
+        });
+        return this.connectionPromise;
+    }
+
+    private scheduleReconnect(): void {
+        if (this.reconnectTimer !== null || (!this.isOpen && !this.isTyping)) return;
+        const delay = Math.min(30_000, 500 * (2 ** this.reconnectAttempt++));
+        this.reconnectTimer = window.setTimeout(() => {
+            this.reconnectTimer = null;
+            this.connectWebSocket().catch(() => this.scheduleReconnect());
+        }, delay);
     }
 
     private handleWebSocketMessage(data: string): void {
@@ -635,7 +657,12 @@ export class Widget {
         this.showTypingIndicator();
 
         // Connect if needed
-        await this.connectWebSocket();
+        try {
+            await this.connectWebSocket();
+        } catch {
+            await this.sendViaHttp(content);
+            return;
+        }
 
         // Send via WebSocket
         if (this.ws?.readyState === WebSocket.OPEN) {
@@ -673,6 +700,7 @@ export class Widget {
                 body: JSON.stringify({
                     message: content,
                     conversationId: this.conversationId,
+                    workspaceId: this.config.workspaceId || undefined,
                     context: (this.config as any).context || undefined,
                 }),
             });
@@ -693,23 +721,30 @@ export class Widget {
                 timestamp: new Date(),
             });
 
+            let sseBuffer = '';
             while (reader) {
                 const { done, value } = await reader.read();
                 if (done) break;
 
-                const text = decoder.decode(value);
-                const lines = text.split('\n');
-
-                for (const line of lines) {
+                sseBuffer += decoder.decode(value, { stream: true });
+                const events = sseBuffer.split(/\r?\n\r?\n/);
+                sseBuffer = events.pop() || '';
+                for (const event of events) {
+                    for (const line of event.split(/\r?\n/)) {
                     if (line.startsWith('data: ')) {
-                        const data = JSON.parse(line.slice(6));
+                        const data: ChatResponse = JSON.parse(line.slice(6));
                         if (data.type === 'token') {
-                            this.appendToLastMessage(data.content);
-                            this.tts.processText(data.content);
+                            this.appendToLastMessage(data.content || '');
+                            this.tts.processText(data.content || '');
                         } else if (data.type === 'conversationId') {
-                            this.conversationId = data.id;
+                            this.conversationId = data.id || null;
+                        } else if (data.type === 'status') {
+                            this.updateTypingIndicator(data.message || 'Processing...');
+                        } else if (data.type === 'sources' && data.sources) {
+                            this.renderSourcesForLastMessage(data.sources);
                         } else if (data.type === 'done') {
                             this.finishTyping();
+                            if (data.sources) this.renderSourcesForLastMessage(data.sources);
                             if (data.messageId) {
                                 this.renderFeedbackButtonsForLastMessage(data.messageId);
                             }
@@ -720,6 +755,7 @@ export class Widget {
                                 this.renderHandoffOptions();
                             }
                         }
+                    }
                     }
                 }
             }
@@ -755,12 +791,19 @@ export class Widget {
         if (lastMessage && lastMessage.role === 'assistant') {
             lastMessage.content += token;
 
-            const el = this.messagesContainer.querySelector(`[data-id="${lastMessage.id}"] .ai-widget-message-content`);
-            if (el) {
-                el.innerHTML = this.formatContent(lastMessage.content);
+            if (this.renderFrame === null) {
+                this.renderFrame = requestAnimationFrame(() => {
+                    this.renderFrame = null;
+                    const current = this.messages[this.messages.length - 1];
+                    if (!current || current.role !== 'assistant') return;
+                    const el = this.messagesContainer.querySelector(
+                        `[data-id="${current.id}"] .ai-widget-message-content`
+                    );
+                    if (el) el.innerHTML = this.formatContent(current.content);
+                    this.scrollToBottom();
+                });
             }
         }
-        this.scrollToBottom();
     }
 
     private renderSourcesForLastMessage(sources: Source[]): void {
