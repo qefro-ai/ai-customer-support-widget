@@ -28,6 +28,28 @@ const MODEL_URL =
     'https://huggingface.co/litert-community/whisper-tiny/resolve/main/whisper_tiny_30s_i8.tflite';
 const WASM_CDN = 'https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.2/wasm/';
 
+/**
+ * Emscripten resolves .wasm relative to the worker script URL. For Vite
+ * blob/asset workers that becomes a same-origin HTML page (`<!DOCTYPE…`),
+ * which fails WebAssembly.instantiate. Force absolute CDN paths.
+ */
+function installWasmLocateFile(): void {
+    const prev = (self as any).Module || {};
+    (self as any).Module = {
+        ...prev,
+        locateFile(path: string, scriptDirectory?: string) {
+            const file = path.split('/').pop() || path;
+            if (file.endsWith('.wasm') || file.endsWith('.js')) {
+                return `${WASM_CDN}${file}`;
+            }
+            if (typeof prev.locateFile === 'function') {
+                return prev.locateFile(path, scriptDirectory);
+            }
+            return `${WASM_CDN}${file}`;
+        },
+    };
+}
+
 const MEL_SHAPE = [1, WHISPER_N_MELS, WHISPER_N_FRAMES] as const; // [1,80,3000]
 const SEQ_LEN = 128;
 const VOCAB_SIZE = 51865;
@@ -104,6 +126,7 @@ async function loadModel(onProgress: (pct: number) => void): Promise<void> {
     if (ready && model) return;
 
     onProgress(5);
+    installWasmLocateFile();
     await loadLiteRt(WASM_CDN);
     onProgress(15);
 
