@@ -286,7 +286,9 @@ export class Widget {
         if (this.isOpen) {
             if (!this.settings?.leadCaptureEnabled || this.isLeadSubmitted) {
                 this.input.focus();
-                this.connectWebSocket();
+                this.connectWebSocket().catch(() => {
+                    // HTTP fallback is used on send; ignore open-time WS failures
+                });
             } else {
                 const nameInput = this.container.querySelector('#lead-name') as HTMLInputElement;
                 nameInput?.focus();
@@ -477,7 +479,9 @@ export class Widget {
                     overlay.classList.add('fade-out');
                     setTimeout(() => {
                         overlay.remove();
-                        this.connectWebSocket();
+                        this.connectWebSocket().catch(() => {
+                            // HTTP fallback is used on send; ignore open-time WS failures
+                        });
                         this.input.focus();
                     }, 450);
                 } else {
