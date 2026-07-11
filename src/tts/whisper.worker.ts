@@ -23,15 +23,37 @@ import {
     DECODE_START_TOKEN_ID,
     DECODE_STOP_TOKEN_ID,
 } from './whisper-tokenizer';
+import { fetchCached, cacheMatch, cachePut } from './whisper-cache';
 
 const MODEL_URL =
     'https://huggingface.co/litert-community/whisper-tiny/resolve/main/whisper_tiny_30s_i8.tflite';
 const WASM_CDN = 'https://cdn.jsdelivr.net/npm/@litertjs/core@2.5.2/wasm/';
 
+/** Blob URLs for cached Wasm assets (so locateFile never hits the network twice). */
+const wasmBlobUrls = new Map<string, string>();
+
+async function ensureWasmAssetCached(file: string): Promise<string> {
+    const existing = wasmBlobUrls.get(file);
+    if (existing) return existing;
+
+    const url = `${WASM_CDN}${file}`;
+    let bytes = await cacheMatch(url);
+    if (!bytes) {
+        const res = await fetch(url);
+        if (!res.ok) throw new Error(`Failed to download Wasm asset ${file}: ${res.status}`);
+        bytes = await res.arrayBuffer();
+        const type = file.endsWith('.wasm') ? 'application/wasm' : 'text/javascript';
+        await cachePut(url, bytes, type);
+    }
+    const type = file.endsWith('.wasm') ? 'application/wasm' : 'text/javascript';
+    const blobUrl = URL.createObjectURL(new Blob([bytes], { type }));
+    wasmBlobUrls.set(file, blobUrl);
+    return blobUrl;
+}
+
 /**
- * Emscripten resolves .wasm relative to the worker script URL. For Vite
- * blob/asset workers that becomes a same-origin HTML page (`<!DOCTYPE…`),
- * which fails WebAssembly.instantiate. Force absolute CDN paths.
+ * Emscripten resolves .wasm relative to the worker script URL. Point locateFile
+ * at Cache API–backed blob URLs (absolute CDN on first miss).
  */
 function installWasmLocateFile(): void {
     const prev = (self as any).Module || {};
@@ -39,6 +61,8 @@ function installWasmLocateFile(): void {
         ...prev,
         locateFile(path: string, scriptDirectory?: string) {
             const file = path.split('/').pop() || path;
+            const cached = wasmBlobUrls.get(file);
+            if (cached) return cached;
             if (file.endsWith('.wasm') || file.endsWith('.js')) {
                 return `${WASM_CDN}${file}`;
             }
@@ -58,37 +82,6 @@ const MASKED_OUT = -0.7 * 3.4028235e38;
 
 let model: CompiledModel | null = null;
 let ready = false;
-
-async function fetchWithProgress(
-    url: string,
-    onProgress: (pct: number) => void
-): Promise<Uint8Array> {
-    const res = await fetch(url);
-    if (!res.ok) throw new Error(`Failed to download model: ${res.status}`);
-    const total = Number(res.headers.get('content-length')) || 0;
-    if (!res.body) {
-        onProgress(100);
-        return new Uint8Array(await res.arrayBuffer());
-    }
-    const reader = res.body.getReader();
-    const chunks: Uint8Array[] = [];
-    let received = 0;
-    for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        chunks.push(value);
-        received += value.length;
-        if (total > 0) onProgress(Math.min(99, Math.round((received / total) * 100)));
-    }
-    const out = new Uint8Array(received);
-    let offset = 0;
-    for (const c of chunks) {
-        out.set(c, offset);
-        offset += c.length;
-    }
-    onProgress(100);
-    return out;
-}
 
 function buildCausalMask4D(seqLen: number): Float32Array {
     // Shape [1, 1, S, S]
@@ -127,14 +120,37 @@ async function loadModel(onProgress: (pct: number) => void): Promise<void> {
 
     onProgress(5);
     installWasmLocateFile();
+
+    // Cache Wasm binaries so locateFile serves blob: URLs on repeat visits.
+    // JS glue still loads from CDN (small; jsDelivr sends immutable Cache-Control).
+    try {
+        await Promise.all([
+            ensureWasmAssetCached('litert_wasm_internal.wasm'),
+            ensureWasmAssetCached('litert_wasm_compat_internal.wasm'),
+        ]);
+    } catch (e) {
+        console.warn('[Whisper LiteRT] Wasm prefetch failed, CDN fallback:', e);
+    }
+
     await loadLiteRt(WASM_CDN);
     onProgress(15);
 
-    await loadWhisperTokenizer((p) => onProgress(15 + Math.round(p * 0.15)));
-    onProgress(35);
+    await loadWhisperTokenizer((p) => onProgress(15 + Math.round(p * 0.1)));
+    onProgress(30);
 
-    const modelBytes = await fetchWithProgress(MODEL_URL, (p) =>
-        onProgress(35 + Math.round(p * 0.55))
+    let modelFromCache = false;
+    const modelBytes = await fetchCached(MODEL_URL, {
+        contentType: 'application/octet-stream',
+        onProgress: (p) => onProgress(30 + Math.round(p * 0.55)),
+        onSource: (kind) => {
+            modelFromCache = kind === 'hit';
+            if (kind === 'hit') {
+                self.postMessage({ status: 'progress', progress: 50, cached: true });
+            }
+        },
+    });
+    console.debug(
+        `[Whisper LiteRT] model ${modelFromCache ? 'loaded from Cache API' : 'downloaded and cached'} (${modelBytes.byteLength} bytes)`
     );
 
     const accelerator = isWebGPUSupported() ? 'webgpu' : 'wasm';

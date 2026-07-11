@@ -79,7 +79,9 @@ export class Widget {
         this.stt.setOnResult((transcript) => this.handleSTTResult(transcript, true));
         this.stt.setOnStateChange(this.handleSTTStateChange.bind(this));
         this.stt.setOnProgress((progress) => {
-            if (progress >= 100) {
+            if (progress < 0) {
+                this.showStatus('Loading Whisper STT from cache...', 'info');
+            } else if (progress >= 100) {
                 this.showStatus('Initializing model... (this takes a moment)', 'info');
             } else {
                 this.showStatus(`Downloading Whisper STT model... ${Math.round(progress)}%`, 'info');

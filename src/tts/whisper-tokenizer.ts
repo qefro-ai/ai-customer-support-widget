@@ -2,6 +2,8 @@
  * Minimal Whisper BPE tokenizer (decode-only) from HuggingFace tokenizer.json.
  */
 
+import { fetchCached } from './whisper-cache';
+
 const TOKENIZER_URL =
     'https://huggingface.co/openai/whisper-tiny/resolve/main/tokenizer.json';
 
@@ -49,9 +51,11 @@ export async function loadWhisperTokenizer(
 
     charToByte = buildCharToByte();
 
-    const res = await fetch(TOKENIZER_URL);
-    if (!res.ok) throw new Error(`Failed to fetch tokenizer: ${res.status}`);
-    const json = (await res.json()) as TokenizerJson;
+    const bytes = await fetchCached(TOKENIZER_URL, {
+        contentType: 'application/json',
+        onProgress: (p) => onProgress?.(Math.round(p * 0.5)),
+    });
+    const json = JSON.parse(new TextDecoder().decode(bytes)) as TokenizerJson;
     onProgress?.(50);
 
     const maxId = Math.max(
@@ -70,7 +74,6 @@ export async function loadWhisperTokenizer(
             specialIds.add(t.id);
         }
     }
-    // Mark common whisper specials
     for (let id = 50257; id <= 50363; id++) specialIds.add(id);
 
     onProgress?.(100);

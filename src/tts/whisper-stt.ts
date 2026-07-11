@@ -77,7 +77,12 @@ export class WhisperSTT {
                     reject(new Error(message.error));
                 } else if (message.status === 'progress') {
                     if (this.onProgress && typeof message.progress === 'number') {
-                        this.onProgress(message.progress);
+                        // Negative progress signals cache hit for UI copy
+                        if (message.cached) {
+                            this.onProgress(-1);
+                        } else {
+                            this.onProgress(message.progress);
+                        }
                     }
                 }
             });
