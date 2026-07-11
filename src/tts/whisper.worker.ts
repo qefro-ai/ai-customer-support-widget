@@ -80,7 +80,6 @@ function buildCausalMask4D(seqLen: number): Float32Array {
 
 function argmaxVocab(logits: Float32Array, tokenIndex: number): number {
     const start = tokenIndex * VOCAB_SIZE;
-    const end = start + VOCAB_SIZE;
     let best = 0;
     let bestVal = logits[start];
     for (let i = 1; i < VOCAB_SIZE; i++) {

@@ -18,10 +18,10 @@ interface TokenizerJson {
 
 let idToToken: string[] | null = null;
 let specialIds: Set<number> | null = null;
-let byteDecoder: string[] | null = null;
+let charToByte: Map<string, number> | null = null;
 
-function buildByteDecoder(): string[] {
-    // GPT-2 / Whisper bytes_to_unicode reverse map
+/** GPT-2 / Whisper bytes_to_unicode reverse map (char → byte). */
+function buildCharToByte(): Map<string, number> {
     const bs: number[] = [];
     for (let i = 33; i <= 126; i++) bs.push(i);
     for (let i = 161; i <= 172; i++) bs.push(i);
@@ -35,31 +35,19 @@ function buildByteDecoder(): string[] {
             n++;
         }
     }
-    const decoder: string[] = new Array(256);
-    // Map unicode codepoint char → byte. We need char → byte for decoding tokens.
-    // Actually we need: token string chars → bytes. bytes_to_unicode maps byte→char.
-    const byteToChar = new Map<number, string>();
+    const map = new Map<string, number>();
     for (let i = 0; i < bs.length; i++) {
-        byteToChar.set(bs[i], String.fromCharCode(cs[i]));
+        map.set(String.fromCharCode(cs[i]), bs[i]);
     }
-    const charToByte = new Map<string, number>();
-    for (const [b, ch] of byteToChar) charToByte.set(ch, b);
-
-    // Store as parallel arrays keyed by char code of the unicode char used in vocab
-    // We'll use a Map in decode instead — keep a module-level map.
-    (buildByteDecoder as any)._charToByte = charToByte;
-    return decoder;
+    return map;
 }
-
-let charToByte: Map<string, number> | null = null;
 
 export async function loadWhisperTokenizer(
     onProgress?: (pct: number) => void
 ): Promise<void> {
     if (idToToken) return;
 
-    buildByteDecoder();
-    charToByte = (buildByteDecoder as any)._charToByte as Map<string, number>;
+    charToByte = buildCharToByte();
 
     const res = await fetch(TOKENIZER_URL);
     if (!res.ok) throw new Error(`Failed to fetch tokenizer: ${res.status}`);
