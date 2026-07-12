@@ -57,6 +57,7 @@ export class Widget {
         welcomeMessage: string;
         leadCaptureEnabled: boolean;
         leadCaptureFields: string[];
+        showSourcesInWidget: boolean;
         handoffConfig?: {
             email_recipient?: string | null;
             whatsapp_number?: string | null;
@@ -319,6 +320,7 @@ export class Widget {
                     welcomeMessage: data.welcome_message,
                     leadCaptureEnabled: data.lead_capture_enabled,
                     leadCaptureFields: data.lead_capture_fields,
+                    showSourcesInWidget: data.show_sources_in_widget ?? true,
                     handoffConfig: data.handoff_config,
                 };
                 
@@ -813,6 +815,9 @@ export class Widget {
     }
 
     private renderSourcesForLastMessage(sources: Source[]): void {
+        if (this.settings?.showSourcesInWidget === false) {
+            return;
+        }
         const lastMessage = this.messages[this.messages.length - 1];
         if (lastMessage && lastMessage.role === 'assistant') {
             const el = this.messagesContainer.querySelector(`[data-id="${lastMessage.id}"]`);
