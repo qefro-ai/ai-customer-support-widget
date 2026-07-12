@@ -6,18 +6,20 @@
  */
 
 export interface SentenceBufferConfig {
-    /** Maximum words per sentence for speech (default: 20) */
+    /** Maximum words per sentence for speech (default: 40) */
     maxWordsPerSentence: number;
-    /** Timeout in ms to flush buffer if no punctuation (default: 3000) */
+    /** Timeout in ms to flush buffer if no punctuation (default: 800) */
     flushTimeout: number;
+    /** Max sentences spoken per assistant response (default: 20) */
+    maxSentencesToSpeak: number;
     /** Custom unsafe patterns to filter */
     unsafePatterns?: RegExp[];
 }
 
 const DEFAULT_CONFIG: SentenceBufferConfig = {
-    maxWordsPerSentence: 20,
-    // Lower flush timeout → earlier first audio when stream lacks punctuation
+    maxWordsPerSentence: 40,
     flushTimeout: 800,
+    maxSentencesToSpeak: 20,
     unsafePatterns: [],
 };
 
@@ -58,10 +60,11 @@ export class SentenceBuffer {
     private flushTimer: ReturnType<typeof setTimeout> | null = null;
     private onSentence: SentenceCallback | null = null;
     private spokenCount: number = 0;
-    private maxSentencesToSpeak: number = 2; // Only speak first 2 sentences per response
+    private maxSentencesToSpeak: number;
 
     constructor(config: Partial<SentenceBufferConfig> = {}) {
         this.config = { ...DEFAULT_CONFIG, ...config };
+        this.maxSentencesToSpeak = this.config.maxSentencesToSpeak;
         this.unsafePatterns = [
             ...DEFAULT_UNSAFE_PATTERNS,
             ...(this.config.unsafePatterns || []),
@@ -106,9 +109,8 @@ export class SentenceBuffer {
      * Extract complete sentences from buffer
      */
     private extractSentences(): string[] {
-        // Match sentences ending with . ! or ?
-        // Include the preceding text to capture full sentence
-        const sentenceRegex = /[^.!?]*[.!?]+/g;
+        // Latin + Indic danda + CJK punctuation
+        const sentenceRegex = /[^.!?।？！]*[.!?।？！]+/g;
         const matches = this.buffer.match(sentenceRegex);
         return matches || [];
     }
@@ -119,24 +121,22 @@ export class SentenceBuffer {
     isSpeakable(sentence: string): boolean {
         const trimmed = sentence.trim();
 
-        // Empty or too short
-        if (trimmed.length < 10) return false;
+        // Empty or too short (allow short Indic phrases)
+        if (trimmed.length < 4) return false;
 
-        // Check word count
         const words = trimmed.split(/\s+/).filter(w => w.length > 0);
         if (words.length > this.config.maxWordsPerSentence) return false;
-        if (words.length < 3) return false;
+        // Allow 1+ tokens for non-Latin scripts; require 2+ for Latin-heavy
+        const hasNonLatin = /[^\u0000-\u007F]/.test(trimmed);
+        if (!hasNonLatin && words.length < 2) return false;
 
-        // Check max sentences per response
         if (this.spokenCount >= this.maxSentencesToSpeak) return false;
 
-        // Check unsafe patterns
         for (const pattern of this.unsafePatterns) {
             if (pattern.test(trimmed)) return false;
         }
 
-        // Check for question marks (don't repeat questions back)
-        if (trimmed.endsWith('?')) return false;
+        if (trimmed.endsWith('?') || trimmed.endsWith('？')) return false;
 
         return true;
     }

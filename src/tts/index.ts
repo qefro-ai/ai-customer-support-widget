@@ -1,11 +1,10 @@
 /**
  * TTS Controller - Main orchestrator for B2B Text-to-Speech
  *
- * Optimizations:
- * - Prefetch next sentence while current audio plays (pipeline parallelism)
- * - Client-side WAV LRU cache
- * - Event-based playback wait (no 100ms polling)
- * - Faster sentence flush for first-audio latency
+ * Pipeline:
+ * - Sentences enqueue as the LLM streams
+ * - TTS API fetches run ahead (parallel, capped) while audio plays
+ * - Decoded clips enqueue into Web Audio without waiting for prior clip end
  */
 
 import { SentenceBuffer } from './sentence-buffer';
@@ -37,12 +36,14 @@ const DEFAULT_CONFIG: TTSControllerConfig = {
 };
 
 const CLIENT_TTS_CACHE_MAX = 32;
+/** How many TTS HTTP fetches may run at once while audio plays */
+const MAX_CONCURRENT_FETCHES = 3;
 
 interface ITTSEngine {
     speak(text: string): Promise<void>;
-    /** Fetch audio without waiting for playback (for prefetch) */
     fetchAudio?(text: string): Promise<ArrayBuffer>;
-    /** Enqueue pre-fetched audio and wait until that clip finishes */
+    /** Enqueue audio for playback (must NOT wait for the whole queue to drain) */
+    enqueueAudio?(buffer: ArrayBuffer): Promise<void>;
     playAudio?(buffer: ArrayBuffer): Promise<void>;
     stop(): void;
     isSupported(): boolean;
@@ -52,7 +53,6 @@ class WebSpeechEngine implements ITTSEngine {
     private synth: SpeechSynthesis;
     private voice: SpeechSynthesisVoice | null = null;
     private rate = 1.0;
-    private currentUtterance: SpeechSynthesisUtterance | null = null;
 
     constructor() {
         this.synth = window.speechSynthesis;
@@ -83,14 +83,12 @@ class WebSpeechEngine implements ITTSEngine {
             utterance.onend = () => resolve();
             utterance.onerror = (e) => reject(e);
 
-            this.currentUtterance = utterance;
             this.synth.speak(utterance);
         });
     }
 
     stop(): void {
         this.synth.cancel();
-        this.currentUtterance = null;
     }
 
     isSupported(): boolean {
@@ -117,7 +115,6 @@ class ApiEngine implements ITTSEngine {
     private cacheGet(text: string): ArrayBuffer | undefined {
         const hit = this.cache.get(text);
         if (hit) {
-            // LRU touch
             this.cache.delete(text);
             this.cache.set(text, hit);
         }
@@ -161,8 +158,13 @@ class ApiEngine implements ITTSEngine {
         return arrayBuffer;
     }
 
-    async playAudio(buffer: ArrayBuffer): Promise<void> {
+    /** Decode + push onto the play queue; returns as soon as enqueued */
+    async enqueueAudio(buffer: ArrayBuffer): Promise<void> {
         await this.audioPlayer.enqueueWav(buffer);
+    }
+
+    async playAudio(buffer: ArrayBuffer): Promise<void> {
+        await this.enqueueAudio(buffer);
         await this.audioPlayer.waitUntilIdle();
     }
 
@@ -188,6 +190,11 @@ class ApiEngine implements ITTSEngine {
     }
 }
 
+type QueueItem = {
+    text: string;
+    fetch: Promise<ArrayBuffer | null> | null;
+};
+
 export class TTSController {
     private config: TTSControllerConfig;
     private sentenceBuffer: SentenceBuffer;
@@ -196,15 +203,12 @@ export class TTSController {
     private engineType: TTSEngineType = 'none';
     private state: TTSState = 'disabled';
     private enabled = false;
-    private speakQueue: string[] = [];
-    private isSpeaking = false;
+    private queue: QueueItem[] = [];
+    private draining = false;
     private onStateChange: ((state: TTSState) => void) | null = null;
-    private prefetchPromise: Promise<ArrayBuffer | null> | null = null;
-    private prefetchText: string | null = null;
 
     constructor(config: Partial<TTSControllerConfig> = {}) {
         this.config = { ...DEFAULT_CONFIG, ...config };
-        // Faster flush → earlier first audio when LLM streams without punctuation
         this.sentenceBuffer = new SentenceBuffer({ flushTimeout: 800 });
         this.audioPlayer = new AudioPlayer();
 
@@ -313,82 +317,94 @@ export class TTSController {
         if (!this.enabled || !this.engine) return;
 
         const processed = preprocessText(sentence);
-        this.speakQueue.push(processed);
-        // Kick off prefetch for the head of queue immediately
-        this.ensurePrefetch();
-        this.processQueue();
+        this.queue.push({ text: processed, fetch: null });
+        this.fillFetchSlots();
+        this.drainQueue();
     }
 
-    private ensurePrefetch(): void {
-        if (!this.engine?.fetchAudio || this.speakQueue.length === 0) return;
-        const next = this.speakQueue[0];
-        if (this.prefetchText === next && this.prefetchPromise) return;
+    /** Start TTS fetches for upcoming sentences up to the concurrency cap */
+    private fillFetchSlots(): void {
+        if (!this.engine?.fetchAudio) return;
 
-        this.prefetchText = next;
-        this.prefetchPromise = this.engine.fetchAudio(next).catch((err) => {
-            console.error('[TTS] Prefetch failed:', err);
-            return null;
-        });
-    }
-
-    private async processQueue(): Promise<void> {
-        if (this.isSpeaking || this.speakQueue.length === 0) return;
-
-        this.isSpeaking = true;
-        this.setState('speaking');
-
-        while (this.speakQueue.length > 0 && this.enabled) {
-            const text = this.speakQueue.shift()!;
-
-            // Use in-flight prefetch if it matches this sentence
-            let audioPromise: Promise<ArrayBuffer | null>;
-            if (this.prefetchText === text && this.prefetchPromise) {
-                audioPromise = this.prefetchPromise;
-            } else if (this.engine!.fetchAudio) {
-                audioPromise = this.engine!.fetchAudio(text).catch(() => null);
-            } else {
-                audioPromise = Promise.resolve(null);
-            }
-
-            // Prefetch next sentence while current fetch/playback runs
-            if (this.speakQueue.length > 0 && this.engine!.fetchAudio) {
-                const upcoming = this.speakQueue[0];
-                this.prefetchText = upcoming;
-                this.prefetchPromise = this.engine!.fetchAudio(upcoming).catch(() => null);
-            } else {
-                this.prefetchText = null;
-                this.prefetchPromise = null;
-            }
-
-            try {
-                if (this.engine!.playAudio) {
-                    const buffer = await audioPromise;
-                    if (buffer) {
-                        await this.engine!.playAudio(buffer);
-                    } else {
-                        await this.engine!.speak(text);
-                    }
-                } else {
-                    await this.engine!.speak(text);
-                }
-            } catch (error) {
-                console.error('[TTS] Speak error:', error);
-            }
+        let inFlight = 0;
+        for (const item of this.queue) {
+            if (item.fetch) inFlight++;
         }
 
-        this.isSpeaking = false;
-        if (this.enabled) {
-            this.setState('ready');
+        for (const item of this.queue) {
+            if (inFlight >= MAX_CONCURRENT_FETCHES) break;
+            if (item.fetch) continue;
+            const text = item.text;
+            item.fetch = this.engine.fetchAudio(text).catch((err) => {
+                console.error('[TTS] Prefetch failed:', err);
+                return null;
+            });
+            inFlight++;
+        }
+    }
+
+    /**
+     * Ordered drain: wait for each sentence's audio (already fetching ahead),
+     * enqueue onto the player immediately, keep fetching the rest — never block
+     * on playback finishing between sentences.
+     */
+    private async drainQueue(): Promise<void> {
+        if (this.draining) return;
+        if (!this.engine) return;
+
+        this.draining = true;
+        this.setState('speaking');
+
+        try {
+            while (this.queue.length > 0 && this.enabled) {
+                this.fillFetchSlots();
+                const item = this.queue[0];
+
+                let buffer: ArrayBuffer | null = null;
+                if (item.fetch) {
+                    buffer = await item.fetch;
+                } else if (this.engine.fetchAudio) {
+                    buffer = await this.engine.fetchAudio(item.text).catch(() => null);
+                }
+
+                // Drop before enqueue so later sentences can start fetching
+                this.queue.shift();
+                this.fillFetchSlots();
+
+                try {
+                    if (buffer && this.engine.enqueueAudio) {
+                        await this.engine.enqueueAudio(buffer);
+                    } else if (buffer) {
+                        await this.audioPlayer.enqueueWav(buffer);
+                    } else {
+                        await this.engine.speak(item.text);
+                    }
+                } catch (error) {
+                    console.error('[TTS] Speak error:', error);
+                }
+            }
+        } finally {
+            this.draining = false;
+            if (this.queue.length > 0 && this.enabled) {
+                // Sentences arrived while we were finishing the last fetch
+                this.drainQueue();
+                return;
+            }
+            // Flip UI back to ready only after playback catches up — do not
+            // block the fetch/enqueue pipeline on this wait.
+            void this.audioPlayer.waitUntilIdle().then(() => {
+                if (!this.draining && this.queue.length === 0 && this.enabled) {
+                    this.setState('ready');
+                }
+            });
         }
     }
 
     stop(): void {
-        this.speakQueue = [];
-        this.prefetchPromise = null;
-        this.prefetchText = null;
+        this.queue = [];
         this.engine?.stop();
         this.audioPlayer.stop();
-        this.isSpeaking = false;
+        this.draining = false;
     }
 
     reset(): void {
@@ -414,9 +430,9 @@ export class TTSController {
         if (!this.engine) return;
 
         const processed = preprocessText(text);
-        this.speakQueue.push(processed);
-        this.ensurePrefetch();
-        this.processQueue();
+        this.queue.push({ text: processed, fetch: null });
+        this.fillFetchSlots();
+        this.drainQueue();
     }
 
     private loadPreference(): void {
