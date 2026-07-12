@@ -1,12 +1,16 @@
 /**
- * B2B AI Chat Widget
- * 
- * One-line embed:
- * <script src="https://cdn.example.ai/widget.js" 
+ * Qefro AI Chat Widget
+ *
+ * Script embed:
+ * <script src="https://cdn.qefro.com/widget.js"
  *         data-token="YOUR_WIDGET_TOKEN"
+ *         data-endpoint="https://api.qefro.com"
  *         data-theme="light"
  *         data-position="bottom-right">
  * </script>
+ *
+ * Programmatic:
+ * import { Widget } from '@qefro-ai/widget';
  */
 
 import { Widget } from './widget';
@@ -21,12 +25,20 @@ function tryParseJSON(value: string): Record<string, any> | undefined {
     }
 }
 
-// Get configuration from script tag
-function getConfig(scriptElement: HTMLScriptElement): WidgetConfig {
-    if (!scriptElement) {
-        throw new Error('AI Widget: Script tag not found');
+function findEmbedScript(): HTMLScriptElement | null {
+    const candidates: Array<HTMLScriptElement | null> = [
+        document.currentScript as HTMLScriptElement | null,
+        document.getElementById('qefro-widget-script') as HTMLScriptElement | null,
+        document.querySelector('script[data-token][src*="widget"]') as HTMLScriptElement | null,
+        document.querySelector('script[id="qefro-widget-script"]') as HTMLScriptElement | null,
+    ];
+    for (const el of candidates) {
+        if (el?.dataset?.token) return el;
     }
+    return null;
+}
 
+function getConfig(scriptElement: HTMLScriptElement): WidgetConfig {
     const token = scriptElement.dataset.token;
     if (!token) {
         throw new Error('AI Widget: data-token is required');
@@ -34,14 +46,12 @@ function getConfig(scriptElement: HTMLScriptElement): WidgetConfig {
 
     return {
         token,
-        endpoint: scriptElement.dataset.endpoint || 'https://api.example.ai',
+        endpoint: scriptElement.dataset.endpoint || 'https://api.qefro.com',
         theme: (scriptElement.dataset.theme as 'light' | 'dark') || 'light',
         position: (scriptElement.dataset.position as 'bottom-right' | 'bottom-left') || 'bottom-right',
-        primaryColor: scriptElement.dataset.primaryColor || '#6366f1',
+        primaryColor: scriptElement.dataset.primaryColor || '#7c3aed',
         welcomeMessage: scriptElement.dataset.welcomeMessage || 'Hi! How can I help you today?',
-        // Optional workspace ID for scoped retrieval and system prompts
         workspaceId: scriptElement.dataset.workspaceId || undefined,
-        // Optional JSON context passed via `data-context` on the script tag
         context: scriptElement.dataset.context ? tryParseJSON(scriptElement.dataset.context) : undefined,
     };
 }
@@ -57,29 +67,27 @@ export interface WidgetConfig {
     context?: Record<string, any>;
 }
 
-// Auto-initialize
+function autoInit(scriptElement: HTMLScriptElement | null): void {
+    if (!scriptElement) return;
+    try {
+        const config = getConfig(scriptElement);
+        injectStyles(config);
+        new Widget(config);
+    } catch (error) {
+        console.error('AI Widget initialization failed:', error);
+    }
+}
+
+// Auto-initialize only for <script data-token> embeds — not npm imports
 (function () {
-    // Capture the script element synchronously while it's executing
-    const currentScript = (document.currentScript as HTMLScriptElement | null)
-        ?? (document.getElementById('qefro-widget-script') as HTMLScriptElement | null)
-        ?? (document.querySelector('script[src*="widget.js"]') as HTMLScriptElement | null);
+    const embedScript = findEmbedScript();
+    if (!embedScript) return;
 
     if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => init(currentScript));
+        document.addEventListener('DOMContentLoaded', () => autoInit(findEmbedScript()));
     } else {
-        init(currentScript);
-    }
-
-    function init(scriptElement: HTMLScriptElement) {
-        try {
-            const config = getConfig(scriptElement);
-            injectStyles(config);
-            new Widget(config);
-        } catch (error) {
-            console.error('AI Widget initialization failed:', error);
-        }
+        autoInit(embedScript);
     }
 })();
 
-// Export for programmatic use
-export { Widget };
+export { Widget, injectStyles };

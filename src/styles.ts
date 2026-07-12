@@ -5,8 +5,21 @@
 import type { WidgetConfig } from './index';
 
 export function injectStyles(config: WidgetConfig): void {
+  const existing = document.getElementById('ai-widget-styles') as HTMLStyleElement | null;
+  if (existing) {
+    // Refresh CSS variables when remounting with a new theme/color
+    existing.textContent = buildStyles(config);
+    return;
+  }
+
   const style = document.createElement('style');
-  style.textContent = `
+  style.id = 'ai-widget-styles';
+  style.textContent = buildStyles(config);
+  document.head.appendChild(style);
+}
+
+function buildStyles(config: WidgetConfig): string {
+  return `
     #ai-widget-container {
       --ai-primary: ${config.primaryColor};
       --ai-primary-dark: color-mix(in srgb, ${config.primaryColor} 85%, black);
@@ -879,5 +892,4 @@ export function injectStyles(config: WidgetConfig): void {
       transform: scale(1.1) translateX(2px);
     }
   `;
-  document.head.appendChild(style);
 }

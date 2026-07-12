@@ -13,8 +13,12 @@ export default defineConfig({
         lib: {
             entry: 'src/index.ts',
             name: 'AIWidget',
-            fileName: 'widget',
-            formats: ['iife'],
+            formats: ['iife', 'es', 'umd'],
+            fileName: (format) => {
+                if (format === 'iife') return 'widget.iife.js';
+                if (format === 'es') return 'widget.js';
+                return 'widget.umd.cjs';
+            },
         },
         rollupOptions: {
             output: {

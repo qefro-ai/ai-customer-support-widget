@@ -6,6 +6,7 @@ import type { WidgetConfig } from './index';
 import { WhisperSTT, WhisperSTTState as STTState } from './tts/whisper-stt';
 import { TTSController } from './tts/index';
 import DOMPurify from 'dompurify';
+import { injectStyles } from './styles';
 
 interface Message {
     id: string;
@@ -87,6 +88,7 @@ export class Widget {
 
     constructor(config: WidgetConfig) {
         this.config = config;
+        injectStyles(config);
         this.container = this.createContainer();
         this.messagesContainer = this.container.querySelector('.ai-widget-messages')!;
         this.input = this.container.querySelector('.ai-widget-input')!;
