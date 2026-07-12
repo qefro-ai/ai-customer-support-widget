@@ -19,6 +19,17 @@ interface Source {
     title: string;
 }
 
+interface PersistedConversation {
+    conversationId: string;
+    messages: Array<{
+        id: string;
+        role: 'user' | 'assistant';
+        content: string;
+        timestamp: string;
+    }>;
+    updatedAt: number;
+}
+
 interface ChatResponse {
     type: 'token' | 'conversationId' | 'done' | 'error' | 'status' | 'sources';
     content?: string;
@@ -26,6 +37,14 @@ interface ChatResponse {
     messageId?: string;
     message?: string;
     sources?: Source[];
+}
+
+interface ServerMessage {
+    id: string;
+    role: 'user' | 'assistant' | 'system';
+    content: string;
+    created_at?: string;
+    createdAt?: string;
 }
 
 
@@ -97,7 +116,7 @@ export class Widget {
         });
         
         this.setupEventListeners();
-        this.addWelcomeMessage();
+        this.restoreConversation();
         this.updateMicButton();
         this.updateSendButtonState();
 
@@ -105,12 +124,159 @@ export class Widget {
         this.badge = this.container.querySelector('.ai-widget-badge');
 
         // Play notification sound and show badge after a short delay
-        setTimeout(() => {
-            this.playNotificationSound();
-            this.updateBadge();
-        }, 1000);
+        // (only for fresh welcome — restored chats should stay quiet)
+        if (!this.conversationId) {
+            setTimeout(() => {
+                this.playNotificationSound();
+                this.updateBadge();
+            }, 1000);
+        }
 
         this.fetchSettings();
+    }
+
+    private storageKey(): string {
+        return `ai-widget-conversation-${this.config.token}`;
+    }
+
+    private persistConversation(): void {
+        if (!this.conversationId) return;
+
+        const meaningful = this.messages.filter(
+            (m) => m.id !== 'welcome' && m.content.trim().length > 0
+        );
+        if (meaningful.length === 0) return;
+
+        const payload: PersistedConversation = {
+            conversationId: this.conversationId,
+            messages: meaningful.map((m) => ({
+                id: m.id,
+                role: m.role,
+                content: m.content,
+                timestamp: m.timestamp.toISOString(),
+            })),
+            updatedAt: Date.now(),
+        };
+
+        try {
+            localStorage.setItem(this.storageKey(), JSON.stringify(payload));
+        } catch (error) {
+            console.warn('AI Widget: Failed to persist conversation', error);
+        }
+    }
+
+    private loadPersistedConversation(): PersistedConversation | null {
+        try {
+            const raw = localStorage.getItem(this.storageKey());
+            if (!raw) return null;
+            const parsed = JSON.parse(raw) as PersistedConversation;
+            if (!parsed?.conversationId || !Array.isArray(parsed.messages)) return null;
+            // Drop stale sessions older than 30 days
+            if (parsed.updatedAt && Date.now() - parsed.updatedAt > 30 * 24 * 60 * 60 * 1000) {
+                localStorage.removeItem(this.storageKey());
+                return null;
+            }
+            return parsed;
+        } catch {
+            return null;
+        }
+    }
+
+    private restoreConversation(): void {
+        const saved = this.loadPersistedConversation();
+        if (!saved) {
+            this.addWelcomeMessage();
+            return;
+        }
+
+        this.conversationId = saved.conversationId;
+        this.messagesContainer.innerHTML = '';
+        this.messages = [];
+
+        for (const msg of saved.messages) {
+            if (msg.role !== 'user' && msg.role !== 'assistant') continue;
+            this.addMessage(
+                {
+                    id: msg.id,
+                    role: msg.role,
+                    content: msg.content,
+                    timestamp: new Date(msg.timestamp),
+                },
+                { persist: false }
+            );
+        }
+
+        if (this.messages.length === 0) {
+            this.addWelcomeMessage();
+            return;
+        }
+
+        // Pull latest messages (incl. agent replies while the page was closed)
+        // then keep the socket subscribed so live agent replies still arrive.
+        void this.syncConversationFromServer().finally(() => {
+            this.connectWebSocket().catch(() => {
+                // HTTP fallback still works on send
+            });
+        });
+    }
+
+    private async syncConversationFromServer(): Promise<void> {
+        if (!this.conversationId) return;
+
+        try {
+            const response = await fetch(
+                `${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/messages?limit=100`,
+                {
+                    headers: {
+                        Authorization: `Bearer ${this.config.token}`,
+                    },
+                }
+            );
+
+            if (!response.ok) {
+                // Conversation may have been deleted — keep local cache
+                if (response.status === 404) {
+                    localStorage.removeItem(this.storageKey());
+                    this.conversationId = null;
+                    this.messagesContainer.innerHTML = '';
+                    this.messages = [];
+                    this.addWelcomeMessage();
+                }
+                return;
+            }
+
+            const data = (await response.json()) as ServerMessage[] | { messages: ServerMessage[] };
+            const serverMessages = Array.isArray(data) ? data : data.messages || [];
+            const restored = serverMessages
+                .filter((m) => m.role === 'user' || m.role === 'assistant')
+                .map((m) => ({
+                    id: m.id,
+                    role: m.role as 'user' | 'assistant',
+                    content: m.content,
+                    timestamp: new Date(m.created_at || m.createdAt || Date.now()),
+                }));
+
+            if (restored.length === 0) return;
+
+            this.messagesContainer.innerHTML = '';
+            this.messages = [];
+            for (const msg of restored) {
+                this.addMessage(msg, { persist: false });
+            }
+            this.persistConversation();
+        } catch (error) {
+            console.warn('AI Widget: Failed to sync conversation from server', error);
+        }
+    }
+
+    private resumeConversationOnSocket(): void {
+        if (!this.conversationId || this.ws?.readyState !== WebSocket.OPEN) return;
+        this.ws.send(
+            JSON.stringify({
+                type: 'resume',
+                conversationId: this.conversationId,
+            })
+        );
     }
 
     private createContainer(): HTMLElement {
@@ -533,6 +699,7 @@ export class Widget {
                 this.reconnectAttempt = 0;
                 this.connectionPromise = null;
                 this.setInlineStatus(null);
+                this.resumeConversationOnSocket();
                 resolve();
             };
 
@@ -560,7 +727,8 @@ export class Widget {
     }
 
     private scheduleReconnect(): void {
-        if (this.reconnectTimer !== null || (!this.isOpen && !this.isTyping)) return;
+        // Keep the socket alive for open chats AND resumed conversations waiting on agent replies
+        if (this.reconnectTimer !== null || (!this.isOpen && !this.isTyping && !this.conversationId)) return;
         const delay = Math.min(30_000, 500 * (2 ** this.reconnectAttempt++));
         this.reconnectTimer = window.setTimeout(() => {
             this.reconnectTimer = null;
@@ -575,6 +743,7 @@ export class Widget {
             switch (response.type) {
                 case 'conversationId':
                     this.conversationId = response.id!;
+                    this.persistConversation();
                     break;
 
                 case 'token':
@@ -613,6 +782,7 @@ export class Widget {
                         this.renderFeedbackButtonsForLastMessage(response.messageId);
                     }
                     this.tts.onResponseComplete();
+                    this.persistConversation();
                     const checkLastMsg = this.messages[this.messages.length - 1];
                     if (checkLastMsg && checkLastMsg.role === 'assistant' && 
                         checkLastMsg.content.includes("I don't have that specific information in my knowledge base.")) {
@@ -746,6 +916,7 @@ export class Widget {
                             this.tts.processText(data.content || '');
                         } else if (data.type === 'conversationId') {
                             this.conversationId = data.id || null;
+                            this.persistConversation();
                         } else if (data.type === 'status') {
                             this.updateTypingIndicator(data.message || 'Processing...');
                         } else if (data.type === 'sources' && data.sources) {
@@ -757,6 +928,7 @@ export class Widget {
                                 this.renderFeedbackButtonsForLastMessage(data.messageId);
                             }
                             this.tts.onResponseComplete();
+                            this.persistConversation();
                             const checkLastMsg = this.messages[this.messages.length - 1];
                             if (checkLastMsg && checkLastMsg.role === 'assistant' && 
                                 checkLastMsg.content.includes("I don't have that specific information in my knowledge base.")) {
@@ -782,7 +954,7 @@ export class Widget {
         }
     }
 
-    private addMessage(message: Message): void {
+    private addMessage(message: Message, options: { persist?: boolean } = {}): void {
         this.messages.push(message);
 
         const el = document.createElement('div');
@@ -792,6 +964,10 @@ export class Widget {
 
         this.messagesContainer.appendChild(el);
         this.scrollToBottom();
+
+        if (options.persist !== false) {
+            this.persistConversation();
+        }
     }
 
     private appendToLastMessage(token: string): void {

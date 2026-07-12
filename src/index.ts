@@ -60,7 +60,9 @@ export interface WidgetConfig {
 // Auto-initialize
 (function () {
     // Capture the script element synchronously while it's executing
-    const currentScript = document.currentScript as HTMLScriptElement;
+    const currentScript = (document.currentScript as HTMLScriptElement | null)
+        ?? (document.getElementById('qefro-widget-script') as HTMLScriptElement | null)
+        ?? (document.querySelector('script[src*="widget.js"]') as HTMLScriptElement | null);
 
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', () => init(currentScript));
