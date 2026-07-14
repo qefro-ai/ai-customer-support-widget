@@ -108,14 +108,20 @@ export class AudioPlayer {
         }
 
         const audioBuffer = this.queue.shift()!;
-        this.playBuffer(audioBuffer);
+        void this.playBuffer(audioBuffer);
     }
 
-    private playBuffer(buffer: AudioBuffer): void {
+    private async playBuffer(buffer: AudioBuffer): Promise<void> {
         if (!this.audioContext || !this.gainNode) return;
 
         if (this.audioContext.state === 'suspended') {
-            this.audioContext.resume();
+            try {
+                await this.audioContext.resume();
+            } catch (error) {
+                console.error('[AudioPlayer] Failed to resume AudioContext:', error);
+                this.setState('idle');
+                return;
+            }
         }
 
         this.currentSource = this.audioContext.createBufferSource();
@@ -128,8 +134,14 @@ export class AudioPlayer {
             this.playNext();
         };
 
-        this.currentSource.start();
-        this.setState('playing');
+        try {
+            this.currentSource.start();
+            this.setState('playing');
+        } catch (error) {
+            console.error('[AudioPlayer] Failed to start playback:', error);
+            this.currentSource = null;
+            this.playNext();
+        }
     }
 
     stop(): void {

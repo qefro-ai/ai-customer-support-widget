@@ -719,6 +719,7 @@ export class Widget {
                 this.connectionPromise = null;
                 this.ws = null;
                 if (this.isTyping) {
+                    this.tts.onResponseComplete();
                     this.finishTyping();
                     this.setInlineStatus('Connection closed before the reply finished. Please try sending again.', 'error');
                 }
@@ -942,6 +943,7 @@ export class Widget {
                 }
             }
 
+            this.tts.onResponseComplete();
             this.finishTyping();
         } catch (error) {
             console.error('AI Widget: HTTP request failed', error);

@@ -38,6 +38,8 @@ const DEFAULT_CONFIG: TTSControllerConfig = {
 const CLIENT_TTS_CACHE_MAX = 32;
 /** How many TTS HTTP fetches may run at once while audio plays */
 const MAX_CONCURRENT_FETCHES = 3;
+const TTS_FETCH_RETRIES = 2;
+const TTS_FETCH_RETRY_DELAY_MS = 400;
 
 interface ITTSEngine {
     speak(text: string): Promise<void>;
@@ -133,29 +135,42 @@ class ApiEngine implements ITTSEngine {
         const cached = this.cacheGet(text);
         if (cached) return cached.slice(0);
 
-        const t0 = performance.now();
-        const response = await fetch(`${this.apiUrl}/api/v1/widget/tts`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${this.apiToken}`,
-                ...(this.workspaceId ? { 'X-Workspace-ID': this.workspaceId } : {})
-            },
-            body: JSON.stringify({ text, lang: 'auto' })
-        });
+        let lastError: unknown;
+        for (let attempt = 0; attempt <= TTS_FETCH_RETRIES; attempt++) {
+            try {
+                const t0 = performance.now();
+                const response = await fetch(`${this.apiUrl}/api/v1/widget/tts`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': `Bearer ${this.apiToken}`,
+                        ...(this.workspaceId ? { 'X-Workspace-ID': this.workspaceId } : {})
+                    },
+                    body: JSON.stringify({ text, lang: 'auto' })
+                });
 
-        if (!response.ok) {
-            throw new Error(`TTS request failed with status: ${response.status}`);
+                if (!response.ok) {
+                    throw new Error(`TTS request failed with status: ${response.status}`);
+                }
+
+                const arrayBuffer = await response.arrayBuffer();
+                const latency = response.headers.get('X-TTS-Latency-Ms');
+                console.debug(
+                    `[TTS] fetch ${text.length} chars in ${(performance.now() - t0).toFixed(0)}ms` +
+                    (latency ? ` (server ${latency}ms)` : '')
+                );
+                this.cachePut(text, arrayBuffer.slice(0));
+                return arrayBuffer;
+            } catch (error) {
+                lastError = error;
+                if (attempt < TTS_FETCH_RETRIES) {
+                    await new Promise((resolve) =>
+                        setTimeout(resolve, TTS_FETCH_RETRY_DELAY_MS * (attempt + 1))
+                    );
+                }
+            }
         }
-
-        const arrayBuffer = await response.arrayBuffer();
-        const latency = response.headers.get('X-TTS-Latency-Ms');
-        console.debug(
-            `[TTS] fetch ${text.length} chars in ${(performance.now() - t0).toFixed(0)}ms` +
-            (latency ? ` (server ${latency}ms)` : '')
-        );
-        this.cachePut(text, arrayBuffer.slice(0));
-        return arrayBuffer;
+        throw lastError;
     }
 
     /** Decode + push onto the play queue; returns as soon as enqueued */
@@ -200,11 +215,13 @@ export class TTSController {
     private sentenceBuffer: SentenceBuffer;
     private audioPlayer: AudioPlayer;
     private engine: ITTSEngine | null = null;
+    private webSpeechFallback: WebSpeechEngine | null = null;
     private engineType: TTSEngineType = 'none';
     private state: TTSState = 'disabled';
     private enabled = false;
     private queue: QueueItem[] = [];
     private draining = false;
+    private initPromise: Promise<void> | null = null;
     private onStateChange: ((state: TTSState) => void) | null = null;
 
     constructor(config: Partial<TTSControllerConfig> = {}) {
@@ -215,6 +232,10 @@ export class TTSController {
         this.sentenceBuffer.setOnSentence(this.handleSentence.bind(this));
         this.loadPreference();
         this.setupVisibilityHandler();
+
+        if (this.enabled) {
+            this.ensureInitialized().catch((e) => console.error('[TTS] Auto-init failed:', e));
+        }
     }
 
     setOnStateChange(callback: (state: TTSState) => void): void {
@@ -248,6 +269,16 @@ export class TTSController {
 
     getState(): TTSState {
         return this.state;
+    }
+
+    private ensureInitialized(): Promise<void> {
+        if (this.engine) return Promise.resolve();
+        if (!this.initPromise) {
+            this.initPromise = this.initialize().finally(() => {
+                this.initPromise = null;
+            });
+        }
+        return this.initPromise;
     }
 
     private async initialize(): Promise<void> {
@@ -301,6 +332,7 @@ export class TTSController {
             }
 
             this.setState('ready');
+            this.drainQueue();
         } catch (error) {
             console.error('[TTS] Initialization failed:', error);
             this.engineType = 'none';
@@ -310,16 +342,19 @@ export class TTSController {
 
     processText(text: string): void {
         if (!this.enabled) return;
+        void this.ensureInitialized();
         this.sentenceBuffer.append(text);
     }
 
     private handleSentence(sentence: string): void {
-        if (!this.enabled || !this.engine) return;
+        if (!this.enabled) return;
 
         const processed = preprocessText(sentence);
         this.queue.push({ text: processed, fetch: null });
-        this.fillFetchSlots();
-        this.drainQueue();
+        void this.ensureInitialized().then(() => {
+            this.fillFetchSlots();
+            this.drainQueue();
+        });
     }
 
     /** Start TTS fetches for upcoming sentences up to the concurrency cap */
@@ -377,10 +412,15 @@ export class TTSController {
                     } else if (buffer) {
                         await this.audioPlayer.enqueueWav(buffer);
                     } else {
-                        await this.engine.speak(item.text);
+                        await this.speakWithFallback(item.text);
                     }
                 } catch (error) {
                     console.error('[TTS] Speak error:', error);
+                    try {
+                        await this.speakWithFallback(item.text);
+                    } catch (fallbackError) {
+                        console.error('[TTS] Fallback speak error:', fallbackError);
+                    }
                 }
             }
         } finally {
@@ -400,9 +440,26 @@ export class TTSController {
         }
     }
 
+    private getWebSpeechFallback(): WebSpeechEngine | null {
+        if (!this.webSpeechFallback) {
+            this.webSpeechFallback = new WebSpeechEngine();
+        }
+        return this.webSpeechFallback.isSupported() ? this.webSpeechFallback : null;
+    }
+
+    /** Use browser speech when API fetch/decode fails */
+    private async speakWithFallback(text: string): Promise<void> {
+        const fallback = this.getWebSpeechFallback();
+        if (!fallback) {
+            throw new Error('No TTS fallback available');
+        }
+        await fallback.speak(text);
+    }
+
     stop(): void {
         this.queue = [];
         this.engine?.stop();
+        this.webSpeechFallback?.stop();
         this.audioPlayer.stop();
         this.draining = false;
     }
@@ -423,10 +480,7 @@ export class TTSController {
     async speakText(text: string): Promise<void> {
         if (!this.enabled || !text.trim()) return;
 
-        if (!this.engine) {
-            await this.initialize();
-        }
-
+        await this.ensureInitialized();
         if (!this.engine) return;
 
         const processed = preprocessText(text);
@@ -457,9 +511,13 @@ export class TTSController {
 
     private setupVisibilityHandler(): void {
         document.addEventListener('visibilitychange', () => {
-            if (document.hidden && this.state === 'speaking') {
+            const activePlayback =
+                this.audioPlayer.isPlaying() ||
+                this.audioPlayer.getQueueLength() > 0 ||
+                this.state === 'speaking';
+            if (document.hidden && activePlayback) {
                 this.audioPlayer.pause();
-            } else if (!document.hidden && this.enabled) {
+            } else if (!document.hidden && this.enabled && this.audioPlayer.getState() === 'paused') {
                 this.audioPlayer.resume();
             }
         });
@@ -475,6 +533,8 @@ export class TTSController {
     dispose(): void {
         this.stop();
         this.audioPlayer.dispose();
+        this.webSpeechFallback?.stop();
+        this.webSpeechFallback = null;
         if (this.engine && 'dispose' in this.engine) {
             (this.engine as ApiEngine).dispose();
         }
