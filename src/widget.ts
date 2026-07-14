@@ -375,7 +375,9 @@ export class Widget {
             );
 
             if (!response.ok) {
-                if (response.status === 404) {
+                // A 401 means this cached thread belongs to an old or different
+                // visitor session and cannot be resumed safely.
+                if (response.status === 401 || response.status === 404) {
                     delete this.inboxStore.threads[conversationId];
                     if (this.inboxStore.activeId === conversationId) {
                         this.inboxStore.activeId = null;
