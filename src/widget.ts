@@ -1202,6 +1202,10 @@ export class Widget {
                     break;
 
                 case 'error':
+                    if (!this.isTyping) {
+                        console.warn('AI Widget: Background socket request failed', response.message);
+                        break;
+                    }
                     this.finishTyping();
                     this.setInlineStatus('Something went wrong while generating the reply. Please try again.', 'error');
                     this.addMessage({
