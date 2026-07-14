@@ -12,8 +12,10 @@ export class WhisperSTT {
     private onResult: ((transcript: string) => void) | null = null;
     private onProgress: ((progress: number) => void) | null = null;
     private transcribeStartedAt = 0;
+    private language?: string;
 
-    constructor(_workerPath?: string) {
+    constructor(_workerPath?: string, language?: string) {
+        this.language = language;
         this.checkSupport();
     }
 
@@ -41,6 +43,10 @@ export class WhisperSTT {
 
     setOnProgress(callback: (progress: number) => void) {
         this.onProgress = callback;
+    }
+
+    setLanguage(language?: string) {
+        this.language = language;
     }
 
     getState() {
@@ -162,7 +168,7 @@ export class WhisperSTT {
 
                     this.transcribeStartedAt = performance.now();
                     this.worker?.postMessage(
-                        { type: 'transcribe', audio: audioData },
+                        { type: 'transcribe', audio: audioData, language: this.language },
                         [audioData.buffer]
                     );
                 } catch (error) {

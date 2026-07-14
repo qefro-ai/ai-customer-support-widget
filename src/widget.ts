@@ -119,7 +119,7 @@ export class Widget {
         this.micButton = this.container.querySelector('.ai-widget-mic');
 
         // Initialize STT (Speech-to-Text)
-        this.stt = new WhisperSTT('./whisper.worker.ts');
+        this.stt = new WhisperSTT('./whisper.worker.ts', this.config.speechLanguage);
         this.stt.setOnResult((transcript) => this.handleSTTResult(transcript, true));
         this.stt.setOnStateChange(this.handleSTTStateChange.bind(this));
         this.stt.setOnProgress((progress) => {

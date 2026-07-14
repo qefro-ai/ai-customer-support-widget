@@ -22,6 +22,11 @@ import {
     decodeWhisperTokens,
     DECODE_START_TOKEN_ID,
     DECODE_STOP_TOKEN_ID,
+    FIRST_LANGUAGE_TOKEN_ID,
+    LAST_LANGUAGE_TOKEN_ID,
+    NO_TIMESTAMPS_TOKEN_ID,
+    TRANSCRIBE_TOKEN_ID,
+    getWhisperLanguageTokenId,
 } from './whisper-tokenizer';
 import { fetchCached, cacheMatch, cachePut } from './whisper-cache';
 
@@ -107,6 +112,20 @@ function argmaxVocab(logits: Float32Array, tokenIndex: number): number {
     return best;
 }
 
+function argmaxRange(logits: Float32Array, tokenIndex: number, first: number, last: number): number {
+    const start = tokenIndex * VOCAB_SIZE;
+    let best = first;
+    let bestVal = logits[start + first];
+    for (let i = first + 1; i <= last; i++) {
+        const value = logits[start + i];
+        if (value > bestVal) {
+            bestVal = value;
+            best = i;
+        }
+    }
+    return best;
+}
+
 async function readTensorF32(t: Tensor): Promise<Float32Array> {
     const cpu = await t.copyTo('wasm');
     const data = cpu.toTypedArray() as Float32Array;
@@ -171,7 +190,7 @@ async function loadModel(onProgress: (pct: number) => void): Promise<void> {
     onProgress(100);
 }
 
-async function runEncodeDecode(mel: Float32Array, warmup = false): Promise<string> {
+async function runEncodeDecode(mel: Float32Array, warmup = false, language?: string): Promise<string> {
     if (!model) throw new Error('Model not loaded');
     if (!model.signatures['encode'] || !model.signatures['decode']) {
         throw new Error(
@@ -198,38 +217,55 @@ async function runEncodeDecode(mel: Float32Array, warmup = false): Promise<strin
     }
 
     const tokenIds = new Int32Array(SEQ_LEN);
-    tokenIds[0] = DECODE_START_TOKEN_ID;
     const maskData = buildCausalMask4D(SEQ_LEN);
     const generated: number[] = [];
-    const maxSteps = warmup ? 2 : SEQ_LEN - 1;
+
+    const runDecoder = async (): Promise<Float32Array> => {
+        const tokenTensor = new Tensor(new Int32Array(tokenIds), [1, SEQ_LEN]);
+        const maskTensor = new Tensor(new Float32Array(maskData), [1, 1, SEQ_LEN, SEQ_LEN]);
+        let logitsTensor: Tensor;
+        try {
+            const decOut = await model!.run('decode', {
+                args_0: encHidden,
+                args_1: tokenTensor,
+                args_2: maskTensor,
+            });
+            logitsTensor = Array.isArray(decOut)
+                ? decOut[0]
+                : decOut['output_0'] ?? Object.values(decOut)[0];
+        } finally {
+            tokenTensor.delete();
+            maskTensor.delete();
+        }
+        const logits = await readTensorF32(logitsTensor);
+        logitsTensor.delete();
+        return logits;
+    };
 
     try {
-        for (let i = 0; i < maxSteps; i++) {
-            const tokenTensor = new Tensor(new Int32Array(tokenIds), [1, SEQ_LEN]);
-            const maskTensor = new Tensor(new Float32Array(maskData), [1, 1, SEQ_LEN, SEQ_LEN]);
+        tokenIds[0] = DECODE_START_TOKEN_ID;
+        let languageToken = getWhisperLanguageTokenId(language);
+        if (!languageToken) {
+            const logits = await runDecoder();
+            languageToken = argmaxRange(
+                logits,
+                0,
+                FIRST_LANGUAGE_TOKEN_ID,
+                LAST_LANGUAGE_TOKEN_ID
+            );
+        }
+        tokenIds[1] = languageToken;
+        tokenIds[2] = TRANSCRIBE_TOKEN_ID;
+        tokenIds[3] = NO_TIMESTAMPS_TOKEN_ID;
 
-            let logitsTensor: Tensor;
-            try {
-                const decOut = await model.run('decode', {
-                    args_0: encHidden,
-                    args_1: tokenTensor,
-                    args_2: maskTensor,
-                });
-                logitsTensor = Array.isArray(decOut)
-                    ? decOut[0]
-                    : decOut['output_0'] ?? Object.values(decOut)[0];
-            } finally {
-                tokenTensor.delete();
-                maskTensor.delete();
-            }
-
-            const logits = await readTensorF32(logitsTensor);
-            logitsTensor.delete();
-
-            const tokenId = argmaxVocab(logits, i);
+        const maxSteps = warmup ? 1 : SEQ_LEN - 4;
+        for (let step = 0; step < maxSteps; step++) {
+            const tokenIndex = 3 + step;
+            const logits = await runDecoder();
+            const tokenId = argmaxVocab(logits, tokenIndex);
             if (tokenId === DECODE_STOP_TOKEN_ID) break;
             generated.push(tokenId);
-            tokenIds[i + 1] = tokenId;
+            tokenIds[tokenIndex + 1] = tokenId;
         }
     } finally {
         try {
@@ -264,7 +300,7 @@ self.addEventListener('message', async (event: MessageEvent) => {
             const mel = computeWhisperLogMel(audio);
             const melMs = performance.now() - t0;
             const t1 = performance.now();
-            const text = await runEncodeDecode(mel);
+            const text = await runEncodeDecode(mel, false, message.language);
             const inferMs = performance.now() - t1;
             self.postMessage({
                 status: 'complete',

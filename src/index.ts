@@ -52,6 +52,7 @@ function getConfig(scriptElement: HTMLScriptElement): WidgetConfig {
         primaryColor: sanitizeCssColor(scriptElement.dataset.primaryColor, '#7c3aed'),
         welcomeMessage: scriptElement.dataset.welcomeMessage || 'Hi! How can I help you today?',
         workspaceId: scriptElement.dataset.workspaceId || undefined,
+        speechLanguage: scriptElement.dataset.speechLanguage || undefined,
         context: scriptElement.dataset.context ? tryParseJSON(scriptElement.dataset.context) : undefined,
     };
 }
@@ -64,6 +65,8 @@ export interface WidgetConfig {
     primaryColor: string;
     welcomeMessage: string;
     workspaceId?: string;
+    /** Whisper language code such as "ta" or "ta-IN". Omit for automatic detection. */
+    speechLanguage?: string;
     context?: Record<string, any>;
 }
 

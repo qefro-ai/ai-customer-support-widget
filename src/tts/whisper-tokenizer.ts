@@ -9,6 +9,10 @@ const TOKENIZER_URL =
 
 export const DECODE_START_TOKEN_ID = 50258; // <|startoftranscript|>
 export const DECODE_STOP_TOKEN_ID = 50257; // <|endoftext|>
+export const TRANSCRIBE_TOKEN_ID = 50359; // <|transcribe|>
+export const NO_TIMESTAMPS_TOKEN_ID = 50363; // <|notimestamps|>
+export const FIRST_LANGUAGE_TOKEN_ID = 50259;
+export const LAST_LANGUAGE_TOKEN_ID = 50357;
 
 interface TokenizerJson {
     model: {
@@ -21,6 +25,7 @@ interface TokenizerJson {
 let idToToken: string[] | null = null;
 let specialIds: Set<number> | null = null;
 let charToByte: Map<string, number> | null = null;
+let languageTokenIds: Map<string, number> | null = null;
 
 /** GPT-2 / Whisper bytes_to_unicode reverse map (char → byte). */
 function buildCharToByte(): Map<string, number> {
@@ -64,6 +69,7 @@ export async function loadWhisperTokenizer(
     );
     idToToken = new Array(maxId + 1).fill('');
     specialIds = new Set<number>();
+    languageTokenIds = new Map<string, number>();
 
     for (const [tok, id] of Object.entries(json.model.vocab)) {
         idToToken[id] = tok;
@@ -73,10 +79,20 @@ export async function loadWhisperTokenizer(
         if (t.special || t.content.startsWith('<|')) {
             specialIds.add(t.id);
         }
+        const language = /^<\|([a-z]{2,3})\|>$/.exec(t.content)?.[1];
+        if (language && t.id >= FIRST_LANGUAGE_TOKEN_ID && t.id <= LAST_LANGUAGE_TOKEN_ID) {
+            languageTokenIds.set(language, t.id);
+        }
     }
     for (let id = 50257; id <= 50363; id++) specialIds.add(id);
 
     onProgress?.(100);
+}
+
+export function getWhisperLanguageTokenId(language?: string): number | undefined {
+    if (!language || language === 'auto') return undefined;
+    if (!languageTokenIds) throw new Error('Tokenizer not loaded');
+    return languageTokenIds.get(language.toLowerCase().split(/[-_]/, 1)[0]);
 }
 
 export function decodeWhisperTokens(tokenIds: number[]): string {
