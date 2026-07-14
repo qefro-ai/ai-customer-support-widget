@@ -6,7 +6,7 @@ import type { WidgetConfig } from './index';
 import { WhisperSTT, WhisperSTTState as STTState } from './tts/whisper-stt';
 import { TTSController } from './tts/index';
 import DOMPurify from 'dompurify';
-import { injectStyles } from './styles';
+import { injectStyles, sanitizeCssColor } from './styles';
 
 interface Message {
     id: string;
@@ -102,7 +102,8 @@ export class Widget {
         handoffConfig?: {
             email_recipient?: string | null;
             whatsapp_number?: string | null;
-            webhook_url?: string | null;
+            has_webhook?: boolean;
+            message?: string | null;
         } | null;
     } | null = null;
     private isLeadSubmitted = false;
@@ -879,8 +880,10 @@ export class Widget {
                 
                 // Dynamically update primary color if provided by server settings
                 if (this.settings.primaryColor) {
-                    this.container.style.setProperty('--ai-primary', this.settings.primaryColor);
-                    this.container.style.setProperty('--ai-primary-dark', `color-mix(in srgb, ${this.settings.primaryColor} 85%, black)`);
+                    const color = sanitizeCssColor(this.settings.primaryColor, this.config.primaryColor);
+                    this.settings.primaryColor = color;
+                    this.container.style.setProperty('--ai-primary', color);
+                    this.container.style.setProperty('--ai-primary-dark', `color-mix(in srgb, ${color} 85%, black)`);
                 }
                 
                 // If welcome message is different from script tag config, update it
@@ -1496,7 +1499,14 @@ export class Widget {
             indicator.className = 'ai-widget-typing';
             this.messagesContainer.appendChild(indicator);
         }
-        indicator.innerHTML = `<span class="ai-widget-status-text">${message}</span><span></span><span></span><span></span>`;
+        indicator.replaceChildren();
+        const text = document.createElement('span');
+        text.className = 'ai-widget-status-text';
+        text.textContent = message;
+        const d1 = document.createElement('span');
+        const d2 = document.createElement('span');
+        const d3 = document.createElement('span');
+        indicator.append(text, d1, d2, d3);
         this.scrollToBottom();
     }
 
@@ -1718,7 +1728,7 @@ export class Widget {
             `;
         }
 
-        if (handoffConfig?.webhook_url) {
+        if (handoffConfig?.has_webhook) {
             optionsHtml += `
                 <button class="ai-widget-handoff-btn ticket-trigger">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
@@ -1791,20 +1801,18 @@ export class Widget {
                 submitBtn.textContent = 'Submitting...';
 
                 try {
-                    if (handoffConfig?.webhook_url) {
-                        await fetch(handoffConfig.webhook_url, {
+                    if (this.conversationId) {
+                        await fetch(
+                            `${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff?session=${encodeURIComponent(this.visitorSession())}`,
+                            {
                             method: 'POST',
-                            mode: 'no-cors',
                             headers: {
                                 'Content-Type': 'application/json',
+                                'x-widget-token': this.config.token,
+                                ...this.sessionHeaders(),
                             },
-                            body: JSON.stringify({
-                                event: 'ticket.created',
-                                conversation_id: this.conversationId,
-                                description: desc,
-                                timestamp: new Date().toISOString()
-                            })
-                        }).catch(e => console.error('Webhook payload forward fail:', e));
+                            body: JSON.stringify({ ticket_description: desc }),
+                        });
                     }
 
                     this.addMessage({
@@ -1813,18 +1821,6 @@ export class Widget {
                         content: `Ticket Submitted: ${desc}`,
                         timestamp: new Date()
                     });
-
-                    if (this.conversationId) {
-                        await fetch(
-                            `${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff?session=${encodeURIComponent(this.visitorSession())}`,
-                            {
-                            method: 'POST',
-                            headers: {
-                                'x-widget-token': this.config.token,
-                                ...this.sessionHeaders(),
-                            }
-                        });
-                    }
 
                     ticketForm.innerHTML = `<div style="color: var(--ai-primary); font-size: 13px; font-weight: 500;">Ticket submitted successfully! A representative will follow up.</div>`;
                     setTimeout(() => {

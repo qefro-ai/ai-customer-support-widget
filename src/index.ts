@@ -14,7 +14,7 @@
  */
 
 import { Widget } from './widget';
-import { injectStyles } from './styles';
+import { injectStyles, sanitizeCssColor } from './styles';
 
 function tryParseJSON(value: string): Record<string, any> | undefined {
     try {
@@ -49,7 +49,7 @@ function getConfig(scriptElement: HTMLScriptElement): WidgetConfig {
         endpoint: scriptElement.dataset.endpoint || 'https://api.qefro.com',
         theme: (scriptElement.dataset.theme as 'light' | 'dark') || 'light',
         position: (scriptElement.dataset.position as 'bottom-right' | 'bottom-left') || 'bottom-right',
-        primaryColor: scriptElement.dataset.primaryColor || '#7c3aed',
+        primaryColor: sanitizeCssColor(scriptElement.dataset.primaryColor, '#7c3aed'),
         welcomeMessage: scriptElement.dataset.welcomeMessage || 'Hi! How can I help you today?',
         workspaceId: scriptElement.dataset.workspaceId || undefined,
         context: scriptElement.dataset.context ? tryParseJSON(scriptElement.dataset.context) : undefined,

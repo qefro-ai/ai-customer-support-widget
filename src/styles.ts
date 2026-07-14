@@ -19,10 +19,11 @@ export function injectStyles(config: WidgetConfig): void {
 }
 
 function buildStyles(config: WidgetConfig): string {
+  const primary = sanitizeCssColor(config.primaryColor);
   return `
     #ai-widget-container {
-      --ai-primary: ${config.primaryColor};
-      --ai-primary-dark: color-mix(in srgb, ${config.primaryColor} 85%, black);
+      --ai-primary: ${primary};
+      --ai-primary-dark: color-mix(in srgb, ${primary} 85%, black);
       --ai-bg: ${config.theme === 'dark' ? 'rgba(30, 30, 46, 0.92)' : 'rgba(255, 255, 255, 0.92)'};
       --ai-bg-secondary: ${config.theme === 'dark' ? 'rgba(42, 42, 62, 0.5)' : 'rgba(245, 245, 247, 0.7)'};
       --ai-text: ${config.theme === 'dark' ? '#e4e4e7' : '#18181b'};
@@ -1026,4 +1027,13 @@ function buildStyles(config: WidgetConfig): string {
       transform: scale(1.1) translateX(2px);
     }
   `;
+}
+
+/** Hex colors only — blocks CSS breakout via primaryColor. */
+export function sanitizeCssColor(raw: string | undefined | null, fallback = '#7c3aed'): string {
+  const s = (raw || '').trim();
+  if (/^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6}|[0-9a-fA-F]{8})$/.test(s)) {
+    return s.toLowerCase();
+  }
+  return fallback;
 }
