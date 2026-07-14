@@ -59,8 +59,8 @@ export class WhisperSTT {
         this.setState('loading');
 
         return new Promise<void>((resolve, reject) => {
-            this.worker = new STTWorker();
-            const worker = this.worker;
+            const worker = new STTWorker();
+            this.worker = worker;
 
             worker.addEventListener('message', (event) => {
                 const message = event.data;

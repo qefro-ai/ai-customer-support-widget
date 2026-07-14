@@ -1551,7 +1551,7 @@ export class Widget {
     private handleSTTStateChange(state: STTState): void {
         this.updateMicButton();
         if (state === 'loading') {
-            this.showStatus('Downloading Whisper STT model (~41MB LiteRT)...', 'info');
+            this.showStatus('Downloading Whisper STT model (~45MB)...', 'info');
         } else if (state === 'ready') {
             this.showStatus('Whisper STT ready', 'info');
             setTimeout(() => this.showStatus(''), 2000);

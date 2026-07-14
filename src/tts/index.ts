@@ -9,15 +9,12 @@
 
 import { SentenceBuffer } from './sentence-buffer';
 import { AudioPlayer } from './audio-player';
-import { PiperModelId } from './piper-wasm';
-import { preprocessText } from './piper-types';
 
 export type TTSState = 'disabled' | 'loading' | 'ready' | 'speaking' | 'error';
 export type TTSEngineType = 'api' | 'webspeech' | 'none';
 
 export interface TTSControllerConfig {
     storageKey: string;
-    modelId: PiperModelId;
     accessibilityAutoEnable: boolean;
     forceWebSpeech: boolean;
     apiUrl: string;
@@ -27,7 +24,6 @@ export interface TTSControllerConfig {
 
 const DEFAULT_CONFIG: TTSControllerConfig = {
     storageKey: 'helpbase_voice_enabled',
-    modelId: 'en_lessac_medium',
     accessibilityAutoEnable: false,
     forceWebSpeech: false,
     apiUrl: 'http://localhost:3000',
@@ -40,6 +36,18 @@ const CLIENT_TTS_CACHE_MAX = 32;
 const MAX_CONCURRENT_FETCHES = 3;
 const TTS_FETCH_RETRIES = 2;
 const TTS_FETCH_RETRY_DELAY_MS = 400;
+
+function preprocessText(text: string): string {
+    return text
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/\bdr\./gi, 'doctor')
+        .replace(/\bmr\./gi, 'mister')
+        .replace(/\bms\./gi, 'miss')
+        .replace(/\bmrs\./gi, 'missus')
+        .replace(/\$(\d+)/g, '$1 dollars')
+        .replace(/(\d+)%/g, '$1 percent');
+}
 
 interface ITTSEngine {
     speak(text: string): Promise<void>;
