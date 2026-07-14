@@ -166,6 +166,28 @@ export class Widget {
         return `ai-widget-inbox-${this.config.token}`;
     }
 
+    /** Stable visitor session — binds server conversations to this browser */
+    private visitorSession(): string {
+        const key = `ai-widget-session-${this.config.token}`;
+        const existing = localStorage.getItem(key);
+        if (existing && /^[a-zA-Z0-9_-]{8,64}$/.test(existing)) {
+            return existing;
+        }
+        const raw =
+            typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+                ? crypto.randomUUID()
+                : `${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
+        const id = raw.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 64) || `s${Date.now()}`;
+        localStorage.setItem(key, id);
+        return id;
+    }
+
+    private sessionHeaders(): HeadersInit {
+        return {
+            'x-widget-session': this.visitorSession(),
+        };
+    }
+
     private emptyStore(): InboxStore {
         return { version: 2, activeId: null, threads: {} };
     }
@@ -342,10 +364,11 @@ export class Widget {
 
         try {
             const response = await fetch(
-                `${this.config.endpoint}/api/v1/widget/conversations/${conversationId}/messages?limit=100`,
+                `${this.config.endpoint}/api/v1/widget/conversations/${conversationId}/messages?limit=100&session=${encodeURIComponent(this.visitorSession())}`,
                 {
                     headers: {
                         Authorization: `Bearer ${this.config.token}`,
+                        ...this.sessionHeaders(),
                     },
                 }
             );
@@ -1056,7 +1079,9 @@ export class Widget {
             .replace('http://', 'ws://');
 
         this.connectionPromise = new Promise<void>((resolve, reject) => {
-            const ws = new WebSocket(`${wsUrl}/ws/chat?token=${encodeURIComponent(this.config.token)}`);
+            const ws = new WebSocket(
+                `${wsUrl}/ws/chat?token=${encodeURIComponent(this.config.token)}&session=${encodeURIComponent(this.visitorSession())}`
+            );
             this.ws = ws;
 
             ws.onopen = () => {
@@ -1255,6 +1280,7 @@ export class Widget {
                 headers: {
                     'Content-Type': 'application/json',
                     'Authorization': `Bearer ${this.config.token}`,
+                    ...this.sessionHeaders(),
                 },
                 body: JSON.stringify({
                     message: content,
@@ -1789,10 +1815,13 @@ export class Widget {
                     });
 
                     if (this.conversationId) {
-                        await fetch(`${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff`, {
+                        await fetch(
+                            `${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff?session=${encodeURIComponent(this.visitorSession())}`,
+                            {
                             method: 'POST',
                             headers: {
                                 'x-widget-token': this.config.token,
+                                ...this.sessionHeaders(),
                             }
                         });
                     }
@@ -1822,10 +1851,13 @@ export class Widget {
         this.setInlineStatus(null);
 
         try {
-            const response = await fetch(`${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff`, {
+            const response = await fetch(
+                `${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff?session=${encodeURIComponent(this.visitorSession())}`,
+                {
                 method: 'POST',
                 headers: {
                     'x-widget-token': this.config.token,
+                    ...this.sessionHeaders(),
                 }
             });
 
