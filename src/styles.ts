@@ -145,6 +145,126 @@ function buildStyles(config: WidgetConfig): string {
       gap: 8px;
     }
 
+    .ai-widget-tabs {
+      display: flex;
+      gap: 4px;
+      padding: 8px 12px 0;
+      background: var(--ai-bg);
+      border-bottom: 1px solid var(--ai-border);
+    }
+
+    .ai-widget-tab {
+      flex: 1;
+      border: none;
+      background: transparent;
+      color: var(--ai-text-secondary);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 8px 10px;
+      border-radius: 8px 8px 0 0;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 6px;
+    }
+
+    .ai-widget-tab.active {
+      color: var(--ai-primary);
+      background: var(--ai-bg-secondary);
+    }
+
+    .ai-widget-inbox-badge {
+      min-width: 16px;
+      height: 16px;
+      padding: 0 4px;
+      border-radius: 999px;
+      background: var(--ai-primary);
+      color: white;
+      font-size: 10px;
+      font-weight: 700;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .ai-widget-inbox-panel {
+      display: none;
+      flex: 1;
+      overflow-y: auto;
+      background: var(--ai-bg);
+    }
+
+    #ai-widget-container.inbox-open .ai-widget-messages,
+    #ai-widget-container.inbox-open .ai-widget-input-container {
+      display: none;
+    }
+
+    #ai-widget-container.inbox-open .ai-widget-inbox-panel {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .ai-widget-inbox-list {
+      display: flex;
+      flex-direction: column;
+      padding: 8px;
+      gap: 6px;
+    }
+
+    .ai-widget-inbox-empty {
+      color: var(--ai-text-secondary);
+      font-size: 13px;
+      line-height: 1.4;
+      padding: 24px 16px;
+      text-align: center;
+    }
+
+    .ai-widget-inbox-item {
+      position: relative;
+      text-align: left;
+      border: 1px solid var(--ai-border);
+      background: var(--ai-bg-secondary);
+      color: var(--ai-text);
+      border-radius: 10px;
+      padding: 10px 12px;
+      cursor: pointer;
+    }
+
+    .ai-widget-inbox-item:hover,
+    .ai-widget-inbox-item.active {
+      border-color: color-mix(in srgb, var(--ai-primary) 45%, var(--ai-border));
+      background: color-mix(in srgb, var(--ai-primary) 8%, var(--ai-bg-secondary));
+    }
+
+    .ai-widget-inbox-item-title {
+      font-size: 13px;
+      font-weight: 600;
+      margin-bottom: 4px;
+    }
+
+    .ai-widget-inbox-item-preview {
+      font-size: 12px;
+      color: var(--ai-text-secondary);
+      line-height: 1.35;
+    }
+
+    .ai-widget-inbox-item-unread {
+      position: absolute;
+      top: 10px;
+      right: 10px;
+      min-width: 18px;
+      height: 18px;
+      padding: 0 5px;
+      border-radius: 999px;
+      background: var(--ai-primary);
+      color: white;
+      font-size: 11px;
+      font-weight: 700;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+    }
+
     .ai-widget-voice {
       background: none;
       border: none;
@@ -763,22 +883,36 @@ function buildStyles(config: WidgetConfig): string {
       to { transform: rotate(360deg); }
     }
 
+    .ai-widget-new-chat,
+    .ai-widget-tts-trigger,
     .ai-widget-handoff-trigger {
       background: none;
       border: none;
       color: white;
       cursor: pointer;
-      opacity: 0.8;
-      transition: opacity 0.2s, transform 0.2s;
+      opacity: 0.85;
+      transition: opacity 0.2s, transform 0.2s, background 0.2s;
       padding: 4px;
+      border-radius: 6px;
       display: flex;
       align-items: center;
       justify-content: center;
     }
 
+    .ai-widget-new-chat:hover,
+    .ai-widget-tts-trigger:hover,
     .ai-widget-handoff-trigger:hover {
       opacity: 1;
-      transform: scale(1.1);
+      background: rgba(255, 255, 255, 0.15);
+      transform: scale(1.05);
+    }
+
+    /* Keep white on primary header — primary-on-primary made the icon vanish */
+    .ai-widget-tts-trigger.active {
+      opacity: 1;
+      color: white;
+      background: rgba(255, 255, 255, 0.22);
+      box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.35);
     }
 
     .ai-widget-feedback {

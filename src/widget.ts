@@ -20,24 +20,43 @@ interface Source {
     title: string;
 }
 
-interface PersistedConversation {
+interface PersistedMessage {
+    id: string;
+    role: 'user' | 'assistant';
+    content: string;
+    timestamp: string;
+}
+
+interface InboxThread {
     conversationId: string;
-    messages: Array<{
-        id: string;
-        role: 'user' | 'assistant';
-        content: string;
-        timestamp: string;
-    }>;
+    title: string;
+    preview: string;
+    messages: PersistedMessage[];
+    updatedAt: number;
+    unread: number;
+}
+
+interface InboxStore {
+    version: 2;
+    activeId: string | null;
+    threads: Record<string, InboxThread>;
+}
+
+/** @deprecated v1 single-conversation shape — migrated on load */
+interface PersistedConversationV1 {
+    conversationId: string;
+    messages: PersistedMessage[];
     updatedAt: number;
 }
 
 interface ChatResponse {
-    type: 'token' | 'conversationId' | 'done' | 'error' | 'status' | 'sources';
+    type: 'token' | 'conversationId' | 'done' | 'error' | 'status' | 'sources' | 'agentMessage';
     content?: string;
     id?: string;
     messageId?: string;
     message?: string;
     sources?: Source[];
+    conversationId?: string;
 }
 
 interface ServerMessage {
@@ -63,6 +82,8 @@ export class Widget {
     private renderFrame: number | null = null;
     private conversationId: string | null = null;
     private messages: Message[] = [];
+    private inboxStore: InboxStore = { version: 2, activeId: null, threads: {} };
+    private viewMode: 'chat' | 'inbox' = 'chat';
     private isOpen = false;
     private isTyping = false;
     private stt: WhisperSTT;
@@ -141,6 +162,40 @@ export class Widget {
         return `ai-widget-conversation-${this.config.token}`;
     }
 
+    private inboxStorageKey(): string {
+        return `ai-widget-inbox-${this.config.token}`;
+    }
+
+    private emptyStore(): InboxStore {
+        return { version: 2, activeId: null, threads: {} };
+    }
+
+    private threadTitle(messages: Message[] | PersistedMessage[]): string {
+        const user = messages.find((m) => m.role === 'user' && m.content.trim());
+        if (!user) return 'Conversation';
+        const text = user.content.trim().replace(/\s+/g, ' ');
+        return text.length > 42 ? `${text.slice(0, 42)}…` : text;
+    }
+
+    private threadPreview(messages: Message[] | PersistedMessage[]): string {
+        for (let i = messages.length - 1; i >= 0; i--) {
+            const m = messages[i];
+            if (m.content.trim()) {
+                const text = m.content.trim().replace(/\s+/g, ' ');
+                return text.length > 64 ? `${text.slice(0, 64)}…` : text;
+            }
+        }
+        return '';
+    }
+
+    private persistInboxStore(): void {
+        try {
+            localStorage.setItem(this.inboxStorageKey(), JSON.stringify(this.inboxStore));
+        } catch (error) {
+            console.warn('AI Widget: Failed to persist inbox', error);
+        }
+    }
+
     private persistConversation(): void {
         if (!this.conversationId) return;
 
@@ -149,64 +204,123 @@ export class Widget {
         );
         if (meaningful.length === 0) return;
 
-        const payload: PersistedConversation = {
-            conversationId: this.conversationId,
-            messages: meaningful.map((m) => ({
-                id: m.id,
-                role: m.role,
-                content: m.content,
-                timestamp: m.timestamp.toISOString(),
-            })),
-            updatedAt: Date.now(),
-        };
+        const persisted: PersistedMessage[] = meaningful.map((m) => ({
+            id: m.id,
+            role: m.role,
+            content: m.content,
+            timestamp: m.timestamp.toISOString(),
+        }));
 
+        const existing = this.inboxStore.threads[this.conversationId];
+        this.inboxStore.threads[this.conversationId] = {
+            conversationId: this.conversationId,
+            title: this.threadTitle(persisted),
+            preview: this.threadPreview(persisted),
+            messages: persisted,
+            updatedAt: Date.now(),
+            unread: existing?.unread ?? 0,
+        };
+        this.inboxStore.activeId = this.conversationId;
+        this.persistInboxStore();
+        this.updateInboxBadge();
+    }
+
+    private loadInboxStore(): InboxStore {
         try {
-            localStorage.setItem(this.storageKey(), JSON.stringify(payload));
-        } catch (error) {
-            console.warn('AI Widget: Failed to persist conversation', error);
+            const raw = localStorage.getItem(this.inboxStorageKey());
+            if (raw) {
+                const parsed = JSON.parse(raw) as InboxStore;
+                if (parsed?.version === 2 && parsed.threads && typeof parsed.threads === 'object') {
+                    // Drop stale threads older than 30 days
+                    const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+                    for (const id of Object.keys(parsed.threads)) {
+                        if ((parsed.threads[id].updatedAt || 0) < cutoff) {
+                            delete parsed.threads[id];
+                        }
+                    }
+                    return parsed;
+                }
+            }
+
+            // Migrate v1 single-conversation key
+            const legacyRaw = localStorage.getItem(this.storageKey());
+            if (legacyRaw) {
+                const legacy = JSON.parse(legacyRaw) as PersistedConversationV1;
+                if (legacy?.conversationId && Array.isArray(legacy.messages)) {
+                    const store = this.emptyStore();
+                    store.activeId = legacy.conversationId;
+                    store.threads[legacy.conversationId] = {
+                        conversationId: legacy.conversationId,
+                        title: this.threadTitle(legacy.messages),
+                        preview: this.threadPreview(legacy.messages),
+                        messages: legacy.messages,
+                        updatedAt: legacy.updatedAt || Date.now(),
+                        unread: 0,
+                    };
+                    localStorage.setItem(this.inboxStorageKey(), JSON.stringify(store));
+                    localStorage.removeItem(this.storageKey());
+                    return store;
+                }
+            }
+        } catch {
+            // fall through
+        }
+        return this.emptyStore();
+    }
+
+    private inboxIds(): string[] {
+        return Object.keys(this.inboxStore.threads);
+    }
+
+    private totalInboxUnread(): number {
+        return Object.values(this.inboxStore.threads).reduce((sum, t) => sum + (t.unread || 0), 0);
+    }
+
+    private updateInboxBadge(): void {
+        const badge = this.container.querySelector('.ai-widget-inbox-badge') as HTMLElement | null;
+        const count = this.totalInboxUnread();
+        if (!badge) return;
+        if (count > 0) {
+            badge.textContent = count > 9 ? '9+' : String(count);
+            badge.style.display = 'inline-flex';
+        } else {
+            badge.style.display = 'none';
         }
     }
 
-    private loadPersistedConversation(): PersistedConversation | null {
-        try {
-            const raw = localStorage.getItem(this.storageKey());
-            if (!raw) return null;
-            const parsed = JSON.parse(raw) as PersistedConversation;
-            if (!parsed?.conversationId || !Array.isArray(parsed.messages)) return null;
-            // Drop stale sessions older than 30 days
-            if (parsed.updatedAt && Date.now() - parsed.updatedAt > 30 * 24 * 60 * 60 * 1000) {
-                localStorage.removeItem(this.storageKey());
-                return null;
-            }
-            return parsed;
-        } catch {
-            return null;
+    private renderMessagesFromList(list: Message[], options: { persist?: boolean } = {}): void {
+        this.messagesContainer.innerHTML = '';
+        this.messages = [];
+        for (const msg of list) {
+            this.addMessage(msg, { persist: options.persist ?? false });
         }
     }
 
     private restoreConversation(): void {
-        const saved = this.loadPersistedConversation();
-        if (!saved) {
+        this.inboxStore = this.loadInboxStore();
+        this.updateInboxBadge();
+
+        const activeId = this.inboxStore.activeId;
+        const active = activeId ? this.inboxStore.threads[activeId] : null;
+
+        if (!active || active.messages.length === 0) {
+            this.conversationId = null;
             this.addWelcomeMessage();
             return;
         }
 
-        this.conversationId = saved.conversationId;
-        this.messagesContainer.innerHTML = '';
-        this.messages = [];
-
-        for (const msg of saved.messages) {
-            if (msg.role !== 'user' && msg.role !== 'assistant') continue;
-            this.addMessage(
-                {
-                    id: msg.id,
-                    role: msg.role,
-                    content: msg.content,
-                    timestamp: new Date(msg.timestamp),
-                },
-                { persist: false }
-            );
-        }
+        this.conversationId = active.conversationId;
+        this.renderMessagesFromList(
+            active.messages
+                .filter((m) => m.role === 'user' || m.role === 'assistant')
+                .map((m) => ({
+                    id: m.id,
+                    role: m.role,
+                    content: m.content,
+                    timestamp: new Date(m.timestamp),
+                })),
+            { persist: false }
+        );
 
         if (this.messages.length === 0) {
             this.addWelcomeMessage();
@@ -222,12 +336,13 @@ export class Widget {
         });
     }
 
-    private async syncConversationFromServer(): Promise<void> {
-        if (!this.conversationId) return;
+    private async syncConversationFromServer(targetId?: string): Promise<void> {
+        const conversationId = targetId || this.conversationId;
+        if (!conversationId) return;
 
         try {
             const response = await fetch(
-                `${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/messages?limit=100`,
+                `${this.config.endpoint}/api/v1/widget/conversations/${conversationId}/messages?limit=100`,
                 {
                     headers: {
                         Authorization: `Bearer ${this.config.token}`,
@@ -236,13 +351,20 @@ export class Widget {
             );
 
             if (!response.ok) {
-                // Conversation may have been deleted — keep local cache
                 if (response.status === 404) {
-                    localStorage.removeItem(this.storageKey());
-                    this.conversationId = null;
-                    this.messagesContainer.innerHTML = '';
-                    this.messages = [];
-                    this.addWelcomeMessage();
+                    delete this.inboxStore.threads[conversationId];
+                    if (this.inboxStore.activeId === conversationId) {
+                        this.inboxStore.activeId = null;
+                    }
+                    this.persistInboxStore();
+                    if (this.conversationId === conversationId) {
+                        this.conversationId = null;
+                        this.messagesContainer.innerHTML = '';
+                        this.messages = [];
+                        this.addWelcomeMessage();
+                    }
+                    this.updateInboxBadge();
+                    if (this.viewMode === 'inbox') this.renderInboxList();
                 }
                 return;
             }
@@ -260,25 +382,246 @@ export class Widget {
 
             if (restored.length === 0) return;
 
-            this.messagesContainer.innerHTML = '';
-            this.messages = [];
-            for (const msg of restored) {
-                this.addMessage(msg, { persist: false });
+            const persisted: PersistedMessage[] = restored.map((m) => ({
+                id: m.id,
+                role: m.role,
+                content: m.content,
+                timestamp: m.timestamp.toISOString(),
+            }));
+            const existing = this.inboxStore.threads[conversationId];
+            this.inboxStore.threads[conversationId] = {
+                conversationId,
+                title: this.threadTitle(persisted),
+                preview: this.threadPreview(persisted),
+                messages: persisted,
+                updatedAt: Date.now(),
+                unread: existing?.unread ?? 0,
+            };
+            this.persistInboxStore();
+
+            if (this.conversationId === conversationId && this.viewMode === 'chat') {
+                this.renderMessagesFromList(restored, { persist: false });
             }
-            this.persistConversation();
+            if (this.viewMode === 'inbox') this.renderInboxList();
+            this.updateInboxBadge();
         } catch (error) {
             console.warn('AI Widget: Failed to sync conversation from server', error);
         }
     }
 
     private resumeConversationOnSocket(): void {
-        if (!this.conversationId || this.ws?.readyState !== WebSocket.OPEN) return;
+        if (this.ws?.readyState !== WebSocket.OPEN) return;
+        const ids = this.inboxIds();
+        if (this.conversationId && !ids.includes(this.conversationId)) {
+            ids.push(this.conversationId);
+        }
+        if (ids.length === 0) return;
+
+        // Bulk watch all inbox + active threads for agent replies
         this.ws.send(
             JSON.stringify({
-                type: 'resume',
-                conversationId: this.conversationId,
+                type: 'watch',
+                conversationIds: ids.slice(0, 20),
             })
         );
+
+        // Also resume active for older backends that only understand resume
+        if (this.conversationId) {
+            this.ws.send(
+                JSON.stringify({
+                    type: 'resume',
+                    conversationId: this.conversationId,
+                })
+            );
+        }
+    }
+
+    private setViewMode(mode: 'chat' | 'inbox'): void {
+        this.viewMode = mode;
+        this.container.classList.toggle('inbox-open', mode === 'inbox');
+        const chatTab = this.container.querySelector('.ai-widget-tab-chat');
+        const inboxTab = this.container.querySelector('.ai-widget-tab-inbox');
+        const inboxPanel = this.container.querySelector('.ai-widget-inbox-panel');
+        chatTab?.classList.toggle('active', mode === 'chat');
+        inboxTab?.classList.toggle('active', mode === 'inbox');
+        chatTab?.setAttribute('aria-selected', mode === 'chat' ? 'true' : 'false');
+        inboxTab?.setAttribute('aria-selected', mode === 'inbox' ? 'true' : 'false');
+        inboxPanel?.setAttribute('aria-hidden', mode === 'inbox' ? 'false' : 'true');
+        if (mode === 'inbox') {
+            this.renderInboxList();
+        }
+    }
+
+    private renderInboxList(): void {
+        const list = this.container.querySelector('.ai-widget-inbox-list');
+        if (!list) return;
+
+        const threads = Object.values(this.inboxStore.threads).sort(
+            (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)
+        );
+
+        if (threads.length === 0) {
+            list.innerHTML = `<div class="ai-widget-inbox-empty">No past conversations yet. Start chatting, then tap + to keep them here.</div>`;
+            return;
+        }
+
+        list.innerHTML = threads
+            .map((t) => {
+                const unread = t.unread > 0
+                    ? `<span class="ai-widget-inbox-item-unread">${t.unread > 9 ? '9+' : t.unread}</span>`
+                    : '';
+                const active = t.conversationId === this.conversationId ? ' active' : '';
+                return `
+                <button type="button" class="ai-widget-inbox-item${active}" data-id="${t.conversationId}">
+                  <div class="ai-widget-inbox-item-title">${this.escapeHtml(t.title || 'Conversation')}</div>
+                  <div class="ai-widget-inbox-item-preview">${this.escapeHtml(t.preview || '')}</div>
+                  ${unread}
+                </button>`;
+            })
+            .join('');
+
+        list.querySelectorAll('.ai-widget-inbox-item').forEach((el) => {
+            el.addEventListener('click', () => {
+                const id = (el as HTMLElement).dataset.id;
+                if (id) void this.openInboxThread(id);
+            });
+        });
+    }
+
+    private escapeHtml(text: string): string {
+        return text
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;');
+    }
+
+    private async openInboxThread(conversationId: string): Promise<void> {
+        const thread = this.inboxStore.threads[conversationId];
+        if (!thread) return;
+
+        // Snapshot current draft/active chat before switching
+        this.snapshotActiveToInbox();
+
+        this.conversationId = conversationId;
+        this.inboxStore.activeId = conversationId;
+        thread.unread = 0;
+        this.persistInboxStore();
+        this.updateInboxBadge();
+
+        this.renderMessagesFromList(
+            thread.messages.map((m) => ({
+                id: m.id,
+                role: m.role,
+                content: m.content,
+                timestamp: new Date(m.timestamp),
+            })),
+            { persist: false }
+        );
+
+        this.setViewMode('chat');
+        this.updateSendButtonState();
+        this.input.focus();
+
+        await this.syncConversationFromServer(conversationId);
+        this.connectWebSocket().catch(() => undefined);
+    }
+
+    /** Save the currently open chat into inbox without clearing it. */
+    private snapshotActiveToInbox(): void {
+        if (!this.conversationId) return;
+        const meaningful = this.messages.filter(
+            (m) => m.id !== 'welcome' && m.content.trim().length > 0
+        );
+        if (meaningful.length === 0) return;
+        this.persistConversation();
+    }
+
+    private startNewConversation(): void {
+        this.tts.onUserMessage();
+        this.hideTypingIndicator();
+        this.isTyping = false;
+        this.setInlineStatus(null);
+
+        // Keep current thread in inbox, then start a blank chat
+        this.snapshotActiveToInbox();
+        if (this.conversationId && this.inboxStore.threads[this.conversationId]) {
+            this.inboxStore.threads[this.conversationId].unread = 0;
+        }
+
+        this.conversationId = null;
+        this.inboxStore.activeId = null;
+        this.persistInboxStore();
+        this.messages = [];
+        this.messagesContainer.innerHTML = '';
+        this.addWelcomeMessage();
+        this.setViewMode('chat');
+        this.updateInboxBadge();
+
+        if (this.isOpen) {
+            this.unreadCount = 0;
+            this.updateBadge();
+        }
+        this.updateSendButtonState();
+        this.input.focus();
+        this.setInlineStatus('Started a new conversation. Past chats are in Inbox.', 'info');
+        window.setTimeout(() => this.setInlineStatus(null), 2500);
+
+        // Stay connected so inbox threads still receive agent replies
+        this.connectWebSocket()
+            .then(() => this.resumeConversationOnSocket())
+            .catch(() => undefined);
+    }
+
+    private handleAgentMessage(conversationId: string, content: string, messageId?: string): void {
+        const msg: Message = {
+            id: messageId || `agent-reply-${Date.now()}`,
+            role: 'assistant',
+            content,
+            timestamp: new Date(),
+        };
+
+        const thread = this.inboxStore.threads[conversationId] || {
+            conversationId,
+            title: 'Conversation',
+            preview: '',
+            messages: [],
+            updatedAt: Date.now(),
+            unread: 0,
+        };
+
+        thread.messages = [
+            ...thread.messages,
+            {
+                id: msg.id,
+                role: msg.role,
+                content: msg.content,
+                timestamp: msg.timestamp.toISOString(),
+            },
+        ];
+        thread.preview = this.threadPreview(thread.messages);
+        thread.title = thread.title || this.threadTitle(thread.messages);
+        thread.updatedAt = Date.now();
+
+        const viewingThis = this.viewMode === 'chat' && this.conversationId === conversationId;
+        if (viewingThis) {
+            this.addMessage(msg, { persist: false });
+            this.tts.processText(content);
+            this.tts.onResponseComplete();
+            thread.unread = 0;
+        } else {
+            thread.unread = (thread.unread || 0) + 1;
+            if (!this.isOpen) {
+                this.unreadCount++;
+                this.updateBadge();
+            }
+        }
+
+        this.inboxStore.threads[conversationId] = thread;
+        this.persistInboxStore();
+        this.updateInboxBadge();
+        if (this.viewMode === 'inbox') this.renderInboxList();
+        this.playNotificationSound();
     }
 
     private createContainer(): HTMLElement {
@@ -297,6 +640,12 @@ export class Widget {
         <div class="ai-widget-header">
           <span>AI Assistant</span>
           <div class="ai-widget-header-actions">
+            <button class="ai-widget-new-chat" aria-label="New conversation" title="New conversation">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <line x1="12" y1="5" x2="12" y2="19"></line>
+                <line x1="5" y1="12" x2="19" y2="12"></line>
+              </svg>
+            </button>
             <button class="ai-widget-tts-trigger" aria-label="Toggle Voice" title="Toggle Voice">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5"></polygon>
@@ -318,7 +667,17 @@ export class Widget {
             </button>
           </div>
         </div>
+        <div class="ai-widget-tabs" role="tablist">
+          <button type="button" class="ai-widget-tab ai-widget-tab-chat active" role="tab" aria-selected="true">Chat</button>
+          <button type="button" class="ai-widget-tab ai-widget-tab-inbox" role="tab" aria-selected="false">
+            Inbox
+            <span class="ai-widget-inbox-badge" style="display:none">0</span>
+          </button>
+        </div>
         <div class="ai-widget-messages"></div>
+        <div class="ai-widget-inbox-panel" aria-hidden="true">
+          <div class="ai-widget-inbox-list"></div>
+        </div>
         <div class="ai-widget-inline-status" aria-live="polite"></div>
         <div class="ai-widget-input-container">
           <button class="ai-widget-mic" aria-label="Voice input" title="Click to speak">
@@ -362,23 +721,26 @@ export class Widget {
         const close = this.container.querySelector('.ai-widget-close')!;
         close.addEventListener('click', () => this.close());
 
+        const newChat = this.container.querySelector('.ai-widget-new-chat')!;
+        newChat.addEventListener('click', () => this.startNewConversation());
+
+        const chatTab = this.container.querySelector('.ai-widget-tab-chat')!;
+        const inboxTab = this.container.querySelector('.ai-widget-tab-inbox')!;
+        chatTab.addEventListener('click', () => this.setViewMode('chat'));
+        inboxTab.addEventListener('click', () => this.setViewMode('inbox'));
+
         const ttsTrigger = this.container.querySelector('.ai-widget-tts-trigger')!;
         this.ttsButton = ttsTrigger as HTMLButtonElement;
         ttsTrigger.addEventListener('click', async () => {
             const enabled = await this.tts.toggle();
-            if (enabled) {
-                this.ttsButton?.classList.add('active');
-                this.ttsButton!.style.color = 'var(--ai-primary)';
-            } else {
-                this.ttsButton?.classList.remove('active');
-                this.ttsButton!.style.color = 'currentColor';
-            }
+            this.ttsButton?.classList.toggle('active', enabled);
+            this.ttsButton?.setAttribute('aria-pressed', enabled ? 'true' : 'false');
         });
-        
+
         // Restore TTS button state if it was enabled from previous sessions
         if (this.tts.isEnabled()) {
             this.ttsButton.classList.add('active');
-            this.ttsButton.style.color = 'var(--ai-primary)';
+            this.ttsButton.setAttribute('aria-pressed', 'true');
         }
 
         const handoffTrigger = this.container.querySelector('.ai-widget-handoff-trigger')!;
@@ -730,8 +1092,9 @@ export class Widget {
     }
 
     private scheduleReconnect(): void {
-        // Keep the socket alive for open chats AND resumed conversations waiting on agent replies
-        if (this.reconnectTimer !== null || (!this.isOpen && !this.isTyping && !this.conversationId)) return;
+        // Keep the socket alive for open chats AND inbox threads waiting on agent replies
+        const hasWatched = !!this.conversationId || this.inboxIds().length > 0;
+        if (this.reconnectTimer !== null || (!this.isOpen && !this.isTyping && !hasWatched)) return;
         const delay = Math.min(30_000, 500 * (2 ** this.reconnectAttempt++));
         this.reconnectTimer = window.setTimeout(() => {
             this.reconnectTimer = null;
@@ -747,12 +1110,27 @@ export class Widget {
                 case 'conversationId':
                     this.conversationId = response.id!;
                     this.persistConversation();
+                    this.resumeConversationOnSocket();
+                    break;
+
+                case 'agentMessage':
+                    if (response.conversationId && response.content) {
+                        this.handleAgentMessage(
+                            response.conversationId,
+                            response.content,
+                            response.messageId
+                        );
+                    }
                     break;
 
                 case 'token':
+                    if (response.conversationId && response.conversationId !== this.conversationId) {
+                        this.handleAgentMessage(response.conversationId, response.content || '');
+                        break;
+                    }
                     const lastMsg = this.messages[this.messages.length - 1];
                     if (!lastMsg || lastMsg.role !== 'assistant') {
-                        // Spontaneous message from agent
+                        // Spontaneous message from agent on active chat
                         this.addMessage({
                             id: `agent-reply-${Date.now()}`,
                             role: 'assistant',
