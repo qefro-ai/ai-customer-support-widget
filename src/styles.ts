@@ -1026,6 +1026,16 @@ function buildStyles(config: WidgetConfig): string {
     .ai-widget-handoff-btn:hover svg {
       transform: scale(1.1) translateX(2px);
     }
+
+    .ai-widget-footer {
+      text-align: center;
+      padding: 6px 0 10px;
+      font-size: 11px;
+      color: var(--ai-text-secondary);
+      background: var(--ai-bg);
+      border-top: 1px solid var(--ai-border);
+      letter-spacing: 0.02em;
+    }
   `;
 }
 

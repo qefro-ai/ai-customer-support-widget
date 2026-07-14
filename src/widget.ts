@@ -732,6 +732,9 @@ export class Widget {
             </svg>
           </button>
         </div>
+        <div class="ai-widget-footer">
+          Powered by Qefro AI • v${__WIDGET_VERSION__}
+        </div>
       </div>
     `;
 

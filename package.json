@@ -1,6 +1,6 @@
 {
   "name": "@qefro-ai/widget",
-  "version": "1.1.5",
+  "version": "1.1.6",
   "description": "Embeddable AI chat widget for Qefro customer support",
   "type": "module",
   "files": [
