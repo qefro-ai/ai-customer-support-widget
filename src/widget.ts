@@ -1380,7 +1380,7 @@ export class Widget {
         const el = document.createElement('div');
         el.className = `ai-widget-message ${message.role}`;
         el.dataset.id = message.id;
-        el.innerHTML = `<div class="ai-widget-message-content">${this.formatContent(message.content)}</div>`;
+        el.innerHTML = `<div class="ai-widget-message-content" dir="auto">${this.formatContent(message.content)}</div>`;
 
         this.messagesContainer.appendChild(el);
         this.scrollToBottom();
