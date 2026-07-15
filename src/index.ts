@@ -16,6 +16,17 @@
 import { Widget } from './widget';
 import { injectStyles, sanitizeCssColor } from './styles';
 
+export type {
+    EndUserAuthMode,
+    WidgetAuthConfig,
+    WidgetIdentity,
+} from './identity';
+export {
+    buildIdentityTransport,
+    normalizeIdentity,
+    sameOriginCredentials,
+} from './identity';
+
 function tryParseJSON(value: string): Record<string, any> | undefined {
     try {
         return JSON.parse(value);

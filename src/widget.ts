@@ -3,6 +3,12 @@
  */
 
 import type { WidgetConfig } from './index';
+import type { WidgetIdentity } from './identity';
+import {
+    buildIdentityTransport,
+    normalizeIdentity,
+    sameOriginCredentials,
+} from './identity';
 import { WhisperSTT, WhisperSTTState as STTState } from './tts/whisper-stt';
 import { TTSController } from './tts/index';
 import DOMPurify from 'dompurify';
@@ -92,6 +98,8 @@ export class Widget {
     private ttsButton: HTMLButtonElement | null = null;
     private unreadCount = 0;  // Track unread messages for badge
     private badge: HTMLElement | null = null;
+    /** End-user identity from identify() — separate from setContext() */
+    private identity: WidgetIdentity | null = null;
     private settings: {
         primaryColor: string;
         widgetPosition: string;
@@ -183,7 +191,25 @@ export class Widget {
     private sessionHeaders(): HeadersInit {
         return {
             'x-widget-session': this.visitorSession(),
+            ...buildIdentityTransport(this.identity).headers,
         };
+    }
+
+    private fetchInit(init: RequestInit = {}): RequestInit {
+        const credentials =
+            this.identity?.auth?.mode === 'session'
+                ? sameOriginCredentials(this.config.endpoint)
+                : (init.credentials ?? 'same-origin');
+        return { ...init, credentials };
+    }
+
+    private chatIdentityPayload(): Record<string, unknown> {
+        const t = buildIdentityTransport(this.identity);
+        const out: Record<string, unknown> = {};
+        if (t.identityBody) out.identity = t.identityBody;
+        if (t.wsAuthFields.endUserToken) out.endUserToken = t.wsAuthFields.endUserToken;
+        if (t.wsAuthFields.endUserSession) out.endUserSession = t.wsAuthFields.endUserSession;
+        return out;
     }
 
     private emptyStore(): InboxStore {
@@ -363,12 +389,12 @@ export class Widget {
         try {
             const response = await fetch(
                 `${this.config.endpoint}/api/v1/widget/conversations/${conversationId}/messages?limit=100&session=${encodeURIComponent(this.visitorSession())}`,
-                {
+                this.fetchInit({
                     headers: {
                         Authorization: `Bearer ${this.config.token}`,
                         ...this.sessionHeaders(),
                     },
-                }
+                })
             );
 
             if (!response.ok) {
@@ -874,11 +900,12 @@ export class Widget {
 
     private async fetchSettings(): Promise<void> {
         try {
-            const response = await fetch(`${this.config.endpoint}/api/v1/widget/settings`, {
+            const response = await fetch(`${this.config.endpoint}/api/v1/widget/settings`, this.fetchInit({
                 headers: {
                     'x-widget-token': this.config.token,
+                    ...this.sessionHeaders(),
                 }
-            });
+            }));
             if (response.ok) {
                 const data = await response.json();
                 this.settings = {
@@ -1040,11 +1067,12 @@ export class Widget {
             errorDiv.style.display = 'none';
 
             try {
-                const response = await fetch(`${this.config.endpoint}/api/v1/widget/leads`, {
+                const response = await fetch(`${this.config.endpoint}/api/v1/widget/leads`, this.fetchInit({
                     method: 'POST',
                     headers: {
                         'Content-Type': 'application/json',
                         'x-widget-token': this.config.token,
+                        ...this.sessionHeaders(),
                     },
                     body: JSON.stringify({
                         name,
@@ -1053,7 +1081,7 @@ export class Widget {
                         company,
                         conversation_id: this.conversationId || null,
                     }),
-                });
+                }));
 
                 if (response.ok) {
                     this.isLeadSubmitted = true;
@@ -1300,6 +1328,7 @@ export class Widget {
                 workspaceId: this.config.workspaceId || undefined,
                 // include optional context to help retrieval / routing on the server
                 context: (this.config as any).context || undefined,
+                ...this.chatIdentityPayload(),
             }));
 
             // Prepare for streamed response with unique ID
@@ -1318,7 +1347,7 @@ export class Widget {
 
     private async sendViaHttp(content: string): Promise<void> {
         try {
-            const response = await fetch(`${this.config.endpoint}/api/v1/widget/chat`, {
+            const response = await fetch(`${this.config.endpoint}/api/v1/widget/chat`, this.fetchInit({
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
@@ -1330,8 +1359,9 @@ export class Widget {
                     conversationId: this.conversationId,
                     workspaceId: this.config.workspaceId || undefined,
                     context: (this.config as any).context || undefined,
+                    ...this.chatIdentityPayload(),
                 }),
-            });
+            }));
 
             if (!response.ok) {
                 throw new Error('Request failed');
@@ -1744,17 +1774,18 @@ export class Widget {
 
                 const submitFeedback = async (isHelpful: boolean, clickedBtn: HTMLButtonElement, otherBtn: HTMLButtonElement) => {
                     try {
-                        const response = await fetch(`${this.config.endpoint}/api/v1/widget/messages/${messageId}/feedback`, {
+                        const response = await fetch(`${this.config.endpoint}/api/v1/widget/messages/${messageId}/feedback`, this.fetchInit({
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
                                 'x-widget-token': this.config.token,
+                                ...this.sessionHeaders(),
                             },
                             body: JSON.stringify({
                                 is_helpful: isHelpful,
                                 comment: null
                             })
-                        });
+                        }));
 
                         if (response.ok) {
                             clickedBtn.classList.add('active');
@@ -1883,7 +1914,7 @@ export class Widget {
                     if (this.conversationId) {
                         await fetch(
                             `${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff?session=${encodeURIComponent(this.visitorSession())}`,
-                            {
+                            this.fetchInit({
                             method: 'POST',
                             headers: {
                                 'Content-Type': 'application/json',
@@ -1891,7 +1922,7 @@ export class Widget {
                                 ...this.sessionHeaders(),
                             },
                             body: JSON.stringify({ ticket_description: desc }),
-                        });
+                        }));
                     }
 
                     this.addMessage({
@@ -1928,13 +1959,13 @@ export class Widget {
         try {
             const response = await fetch(
                 `${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff?session=${encodeURIComponent(this.visitorSession())}`,
-                {
+                this.fetchInit({
                 method: 'POST',
                 headers: {
                     'x-widget-token': this.config.token,
                     ...this.sessionHeaders(),
                 }
-            });
+            }));
 
             if (response.ok) {
                 this.addMessage({
@@ -1962,9 +1993,67 @@ export class Widget {
         if (!this.isOpen) this.toggle();
     }
 
+    /**
+     * Page/product context — NOT identity. Use identify() for authenticated users.
+     */
     public setContext(context: Record<string, any>): void {
         // Store context for next message (merged into existing context)
         this.config = { ...this.config, context: { ...(this.config.context || {}), ...(context || {}) } };
-        console.log('AI Widget: Context set', this.config.context);
+    }
+
+    /**
+     * Identify an authenticated end user. Host app owns JWT/session lifecycle.
+     */
+    public identify(identity: WidgetIdentity): void {
+        this.identity = normalizeIdentity(identity);
+        if (!this.identity.id) {
+            console.warn('AI Widget: identify() requires a non-empty id');
+            this.identity = null;
+        }
+    }
+
+    /** Refresh JWT without restarting the widget. */
+    public setAuthToken(jwt: string): void {
+        const token = String(jwt || '').trim();
+        if (!token) return;
+        if (!this.identity) {
+            this.identity = normalizeIdentity({
+                id: 'unknown',
+                auth: { mode: 'jwt', token },
+            });
+            return;
+        }
+        this.identity = {
+            ...this.identity,
+            auth: {
+                mode: 'jwt',
+                token,
+            },
+        };
+    }
+
+    /**
+     * Clear end-user identity and auth. Keeps visitor session for conversation continuity.
+     * Clears Redis conversation variables on the backend when conversationId is known.
+     */
+    public async clearIdentity(): Promise<void> {
+        this.identity = null;
+        if (!this.conversationId) return;
+        try {
+            await fetch(
+                `${this.config.endpoint}/api/v1/widget/identity/clear`,
+                this.fetchInit({
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${this.config.token}`,
+                        ...this.sessionHeaders(),
+                    },
+                    body: JSON.stringify({ conversationId: this.conversationId }),
+                })
+            );
+        } catch (e) {
+            console.warn('AI Widget: clearIdentity notify failed', e);
+        }
     }
 }

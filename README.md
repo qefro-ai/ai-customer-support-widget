@@ -66,13 +66,27 @@ const widget = new Widget({
 });
 
 widget.open();
-widget.setContext({ userId: 'user-123', email: 'user@example.com' });
+
+// Page context (not identity)
+widget.setContext({ page: '/checkout', productId: 'ABC123' });
+
+// Authenticated end user (your app owns the JWT)
+widget.identify({
+  id: user.id,
+  email: user.email,
+  auth: { mode: 'jwt', token: userJwt },
+});
+widget.setAuthToken(freshJwt); // refresh
+await widget.clearIdentity();  // logout
 ```
+
+See [docs/identity.md](docs/identity.md) for JWT/session auth, security model, and framework examples.
 
 ## Development
 
 ```bash
 npm install
+npm test
 npm run build   # emits dist/widget.iife.js, widget.js (ES), widget.umd.cjs
 npm run dev
 ```
@@ -80,7 +94,7 @@ npm run dev
 ## Release
 
 1. Bump version in `package.json`
-2. Tag and push: `git tag v1.1.0 && git push origin v1.1.0`
+2. Tag and push: `git tag v1.2.0 && git push origin v1.2.0`
 3. GitHub Actions publishes to npm and pushes the CDN Docker image to GHCR
 
 Requires repo secrets: `NPM_TOKEN`, and GHCR permissions for `GITHUB_TOKEN`.
