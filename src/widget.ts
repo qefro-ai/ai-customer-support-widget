@@ -96,6 +96,7 @@ export class Widget {
         primaryColor: string;
         widgetPosition: string;
         welcomeMessage: string;
+        assistantName?: string;
         leadCaptureEnabled: boolean;
         leadCaptureFields: string[];
         showSourcesInWidget: boolean;
@@ -147,13 +148,9 @@ export class Widget {
         // Initialize badge reference
         this.badge = this.container.querySelector('.ai-widget-badge');
 
-        // Play notification sound and show badge after a short delay
-        // (only for fresh welcome — restored chats should stay quiet)
+        // Show unread badge for fresh welcome (no sound until a real message arrives)
         if (!this.conversationId) {
-            setTimeout(() => {
-                this.playNotificationSound();
-                this.updateBadge();
-            }, 1000);
+            setTimeout(() => this.updateBadge(), 1000);
         }
 
         this.fetchSettings();
@@ -656,15 +653,15 @@ export class Widget {
         container.className = `ai-widget ${this.config.theme} ${this.config.position}`;
 
         container.innerHTML = `
-      <button class="ai-widget-trigger" aria-label="Open chat">
+      <button class="ai-widget-trigger" aria-label="Open chat" aria-expanded="false" aria-controls="ai-widget-panel">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
         </svg>
         <span class="ai-widget-badge" style="display: none;">1</span>
       </button>
-      <div class="ai-widget-panel">
+      <div class="ai-widget-panel" id="ai-widget-panel" role="dialog" aria-modal="true" aria-label="Chat assistant">
         <div class="ai-widget-header">
-          <span>AI Assistant</span>
+          <span class="ai-widget-header-title">AI Assistant</span>
           <div class="ai-widget-header-actions">
             <button class="ai-widget-new-chat" aria-label="New conversation" title="New conversation">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -749,6 +746,14 @@ export class Widget {
 
         const close = this.container.querySelector('.ai-widget-close')!;
         close.addEventListener('click', () => this.close());
+
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && this.isOpen) {
+                e.preventDefault();
+                this.close();
+                (trigger as HTMLElement).focus();
+            }
+        });
 
         const newChat = this.container.querySelector('.ai-widget-new-chat')!;
         newChat.addEventListener('click', () => this.startNewConversation());
@@ -843,6 +848,8 @@ export class Widget {
     private toggle(): void {
         this.isOpen = !this.isOpen;
         this.container.classList.toggle('open', this.isOpen);
+        const trigger = this.container.querySelector('.ai-widget-trigger');
+        trigger?.setAttribute('aria-expanded', this.isOpen ? 'true' : 'false');
         if (this.isOpen) {
             if (!this.settings?.leadCaptureEnabled || this.isLeadSubmitted) {
                 this.input.focus();
@@ -862,6 +869,7 @@ export class Widget {
     private close(): void {
         this.isOpen = false;
         this.container.classList.remove('open');
+        this.container.querySelector('.ai-widget-trigger')?.setAttribute('aria-expanded', 'false');
     }
 
     private async fetchSettings(): Promise<void> {
@@ -877,6 +885,7 @@ export class Widget {
                     primaryColor: data.primary_color,
                     widgetPosition: data.widget_position,
                     welcomeMessage: data.welcome_message,
+                    assistantName: data.assistant_name,
                     leadCaptureEnabled: data.lead_capture_enabled,
                     leadCaptureFields: data.lead_capture_fields,
                     showSourcesInWidget: data.show_sources_in_widget ?? true,
@@ -889,6 +898,14 @@ export class Widget {
                     this.settings.primaryColor = color;
                     this.container.style.setProperty('--ai-primary', color);
                     this.container.style.setProperty('--ai-primary-dark', `color-mix(in srgb, ${color} 85%, black)`);
+                }
+
+                const titleEl = this.container.querySelector('.ai-widget-header-title');
+                if (titleEl && this.settings.assistantName) {
+                    titleEl.textContent = this.settings.assistantName;
+                    this.container
+                        .querySelector('.ai-widget-panel')
+                        ?.setAttribute('aria-label', this.settings.assistantName);
                 }
                 
                 // If welcome message is different from script tag config, update it
@@ -955,6 +972,9 @@ export class Widget {
                         <line x1="5" y1="12" x2="19" y2="12"></line>
                         <polyline points="12 5 19 12 12 19"></polyline>
                     </svg>
+                </button>
+                <button class="ai-widget-lead-skip" type="button">
+                    Continue as guest
                 </button>
             </form>
         `;
@@ -1073,6 +1093,17 @@ export class Widget {
                     </svg>
                 `;
             }
+        });
+
+        form.querySelector('.ai-widget-lead-skip')?.addEventListener('click', () => {
+            this.isLeadSubmitted = true;
+            localStorage.setItem(`ai-widget-lead-submitted-${this.config.token}`, 'true');
+            overlay.classList.add('fade-out');
+            setTimeout(() => {
+                overlay.remove();
+                this.connectWebSocket().catch(() => {});
+                this.input.focus();
+            }, 450);
         });
 
         this.container.querySelector('.ai-widget-panel')?.appendChild(overlay);
@@ -1402,7 +1433,10 @@ export class Widget {
             const copyBtn = el.querySelector('.ai-widget-message-copy-btn');
             if (copyBtn) {
                 copyBtn.addEventListener('click', () => {
-                    navigator.clipboard.writeText(message.content).catch(() => {});
+                    const live =
+                        el.querySelector('.ai-widget-message-content')?.textContent?.trim() ||
+                        message.content;
+                    navigator.clipboard.writeText(live).catch(() => {});
                     const svg = copyBtn.querySelector('svg');
                     if (svg) {
                         const originalSvg = svg.outerHTML;

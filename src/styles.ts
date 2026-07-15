@@ -358,6 +358,12 @@ function buildStyles(config: WidgetConfig): string {
       opacity: 1;
     }
 
+    @media (hover: none) {
+      .ai-widget-message-copy-btn {
+        opacity: 0.85;
+      }
+    }
+
     .ai-widget-message-copy-btn:hover {
       color: var(--ai-primary);
       border-color: var(--ai-primary);
@@ -878,6 +884,23 @@ function buildStyles(config: WidgetConfig): string {
       cursor: not-allowed;
       transform: none;
       box-shadow: none;
+    }
+
+    .ai-widget-lead-skip {
+      margin-top: 10px;
+      padding: 10px;
+      border: none;
+      background: transparent;
+      color: var(--ai-text-muted, #94a3b8);
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      text-decoration: underline;
+      text-underline-offset: 3px;
+    }
+
+    .ai-widget-lead-skip:hover {
+      color: var(--ai-text, #e2e8f0);
     }
 
     .ai-widget-lead-error {
