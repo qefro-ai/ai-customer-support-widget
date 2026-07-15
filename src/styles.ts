@@ -360,6 +360,8 @@ function buildStyles(config: WidgetConfig): string {
       font-size: 14px;
       line-height: 1.5;
       word-wrap: break-word;
+      unicode-bidi: plaintext;
+      text-align: start;
     }
 
     .ai-widget-message.user .ai-widget-message-content {
