@@ -1380,7 +1380,43 @@ export class Widget {
         const el = document.createElement('div');
         el.className = `ai-widget-message ${message.role}`;
         el.dataset.id = message.id;
-        el.innerHTML = `<div class="ai-widget-message-content" dir="auto">${this.formatContent(message.content)}</div>`;
+        
+        let copyBtnHtml = '';
+        if (message.role === 'assistant') {
+            copyBtnHtml = `
+                <button class="ai-widget-message-copy-btn" title="Copy message" aria-label="Copy message">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect>
+                        <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path>
+                    </svg>
+                </button>
+            `;
+        }
+
+        el.innerHTML = `
+            <div class="ai-widget-message-content" dir="auto">${this.formatContent(message.content)}</div>
+            ${copyBtnHtml}
+        `;
+
+        if (message.role === 'assistant') {
+            const copyBtn = el.querySelector('.ai-widget-message-copy-btn');
+            if (copyBtn) {
+                copyBtn.addEventListener('click', () => {
+                    navigator.clipboard.writeText(message.content).catch(() => {});
+                    const svg = copyBtn.querySelector('svg');
+                    if (svg) {
+                        const originalSvg = svg.outerHTML;
+                        svg.outerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="color: #10b981;"><polyline points="20 6 9 17 4 12"></polyline></svg>';
+                        setTimeout(() => {
+                            const newSvg = copyBtn.querySelector('svg');
+                            if (newSvg) {
+                                newSvg.outerHTML = originalSvg;
+                            }
+                        }, 2000);
+                    }
+                });
+            }
+        }
 
         this.messagesContainer.appendChild(el);
         this.scrollToBottom();

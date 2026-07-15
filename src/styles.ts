@@ -333,6 +333,34 @@ function buildStyles(config: WidgetConfig): string {
     .ai-widget-message {
       max-width: 85%;
       animation: ai-message-in 0.2s ease;
+      position: relative;
+    }
+
+    .ai-widget-message-copy-btn {
+      position: absolute;
+      bottom: -12px;
+      right: 0;
+      background: var(--ai-bg-primary);
+      border: 1px solid var(--ai-border);
+      color: var(--ai-text-muted);
+      border-radius: 4px;
+      padding: 4px;
+      cursor: pointer;
+      opacity: 0;
+      transition: all 0.2s ease;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 2px 5px rgba(0,0,0,0.05);
+    }
+
+    .ai-widget-message.assistant:hover .ai-widget-message-copy-btn {
+      opacity: 1;
+    }
+
+    .ai-widget-message-copy-btn:hover {
+      color: var(--ai-primary);
+      border-color: var(--ai-primary);
     }
 
     @keyframes ai-message-in {
