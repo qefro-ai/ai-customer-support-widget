@@ -11,11 +11,13 @@ export class WhisperSTT {
     private onStateChange: ((state: WhisperSTTState) => void) | null = null;
     private onResult: ((transcript: string) => void) | null = null;
     private onProgress: ((progress: number) => void) | null = null;
+    private languageHintProvider: (() => string[] | undefined) | null = null;
     private transcribeStartedAt = 0;
     private language?: string;
 
     constructor(_workerPath?: string, language?: string) {
-        this.language = language;
+        // Default "auto" so we never silently fall through to transformers.js English default.
+        this.language = language && language.trim() ? language : 'auto';
         this.checkSupport();
     }
 
@@ -46,7 +48,12 @@ export class WhisperSTT {
     }
 
     setLanguage(language?: string) {
-        this.language = language;
+        this.language = language && language.trim() ? language : 'auto';
+    }
+
+    /** Optional recent chat texts used as a fallback language hint when audio detect is weak. */
+    setLanguageHintProvider(provider: (() => string[] | undefined) | null) {
+        this.languageHintProvider = provider;
     }
 
     getState() {
@@ -167,8 +174,19 @@ export class WhisperSTT {
                     audioData.set(channel);
 
                     this.transcribeStartedAt = performance.now();
+                    let hintTexts: string[] | undefined;
+                    try {
+                        hintTexts = this.languageHintProvider?.() ?? undefined;
+                    } catch {
+                        hintTexts = undefined;
+                    }
                     this.worker?.postMessage(
-                        { type: 'transcribe', audio: audioData, language: this.language },
+                        {
+                            type: 'transcribe',
+                            audio: audioData,
+                            language: this.language || 'auto',
+                            hintTexts,
+                        },
                         [audioData.buffer]
                     );
                 } catch (error) {

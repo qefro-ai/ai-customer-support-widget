@@ -63,7 +63,7 @@ function getConfig(scriptElement: HTMLScriptElement): WidgetConfig {
         primaryColor: sanitizeCssColor(scriptElement.dataset.primaryColor, '#7c3aed'),
         welcomeMessage: scriptElement.dataset.welcomeMessage || 'Hi! How can I help you today?',
         workspaceId: scriptElement.dataset.workspaceId || undefined,
-        speechLanguage: scriptElement.dataset.speechLanguage || undefined,
+        speechLanguage: scriptElement.dataset.speechLanguage || 'auto',
         context: scriptElement.dataset.context ? tryParseJSON(scriptElement.dataset.context) : undefined,
     };
 }
@@ -76,7 +76,11 @@ export interface WidgetConfig {
     primaryColor: string;
     welcomeMessage: string;
     workspaceId?: string;
-    /** Whisper language code such as "ta" or "ta-IN". Omit for automatic detection. */
+    /**
+     * Whisper language for mic STT.
+     * Use `"auto"` (default) for multilingual detection per utterance.
+     * Or force a code such as `"ta"`, `"hi"`, `"ar"`, `"en"`.
+     */
     speechLanguage?: string;
     context?: Record<string, any>;
 }

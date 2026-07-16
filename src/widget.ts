@@ -1614,9 +1614,18 @@ export class Widget {
     /** Lazily construct Whisper STT on first use so embed pages avoid the WASM download. */
     private ensureStt(): WhisperSTT {
         if (!this.stt) {
-            this.stt = new WhisperSTT('./whisper.worker.ts', this.config.speechLanguage);
+            this.stt = new WhisperSTT(
+                './whisper.worker.ts',
+                this.config.speechLanguage || 'auto',
+            );
             this.stt.setOnResult((transcript) => this.handleSTTResult(transcript, true));
             this.stt.setOnStateChange(this.handleSTTStateChange.bind(this));
+            this.stt.setLanguageHintProvider(() =>
+                this.messages
+                    .filter((m) => m.role === 'user' && m.content.trim())
+                    .slice(-6)
+                    .map((m) => m.content),
+            );
             this.stt.setOnProgress((progress) => {
                 if (progress < 0) {
                     this.showStatus('Loading Whisper STT from cache...', 'info');

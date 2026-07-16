@@ -45,6 +45,7 @@ Or via jsDelivr after npm publish:
 | `data-primary-color` | no | Accent color |
 | `data-welcome-message` | no | First assistant message |
 | `data-workspace-id` | no | Scope retrieval to one workspace |
+| `data-speech-language` | no | Mic STT language: `auto` (default, multilingual) or a Whisper code like `ta`, `hi`, `ar`, `en` |
 | `data-context` | no | JSON string of extra context |
 
 ## npm
