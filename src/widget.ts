@@ -92,7 +92,7 @@ export class Widget {
     private viewMode: 'chat' | 'inbox' = 'chat';
     private isOpen = false;
     private isTyping = false;
-    private stt: WhisperSTT;
+    private stt: WhisperSTT | null = null;
     private tts: TTSController;
     private micButton: HTMLButtonElement | null = null;
     private ttsButton: HTMLButtonElement | null = null;
@@ -127,19 +127,7 @@ export class Widget {
         this.inlineStatus = this.container.querySelector('.ai-widget-inline-status')!;
         this.micButton = this.container.querySelector('.ai-widget-mic');
 
-        // Initialize STT (Speech-to-Text)
-        this.stt = new WhisperSTT('./whisper.worker.ts', this.config.speechLanguage);
-        this.stt.setOnResult((transcript) => this.handleSTTResult(transcript, true));
-        this.stt.setOnStateChange(this.handleSTTStateChange.bind(this));
-        this.stt.setOnProgress((progress) => {
-            if (progress < 0) {
-                this.showStatus('Loading Whisper STT from cache...', 'info');
-            } else if (progress >= 100) {
-                this.showStatus('Initializing model... (this takes a moment)', 'info');
-            } else {
-                this.showStatus(`Downloading Whisper STT model... ${Math.round(progress)}%`, 'info');
-            }
-        });
+        // Whisper STT (~22MB WASM) is lazy-loaded on first mic click via ensureStt().
 
         // Initialize TTS
         this.tts = new TTSController({
@@ -1623,13 +1611,28 @@ export class Widget {
         this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
     }
 
+    /** Lazily construct Whisper STT on first use so embed pages avoid the WASM download. */
+    private ensureStt(): WhisperSTT {
+        if (!this.stt) {
+            this.stt = new WhisperSTT('./whisper.worker.ts', this.config.speechLanguage);
+            this.stt.setOnResult((transcript) => this.handleSTTResult(transcript, true));
+            this.stt.setOnStateChange(this.handleSTTStateChange.bind(this));
+            this.stt.setOnProgress((progress) => {
+                if (progress < 0) {
+                    this.showStatus('Loading Whisper STT from cache...', 'info');
+                } else if (progress >= 100) {
+                    this.showStatus('Initializing model... (this takes a moment)', 'info');
+                } else {
+                    this.showStatus(`Downloading Whisper STT model... ${Math.round(progress)}%`, 'info');
+                }
+            });
+        }
+        return this.stt;
+    }
+
     // STT (Speech-to-Text) methods
     private toggleMic(): void {
-        // if (!this.stt.isSupported()) {
-        //     console.warn('[Widget] STT not supported in this browser');
-        //     return;
-        // }
-        this.stt.toggle();
+        this.ensureStt().toggle();
     }
 
     private handleSTTResult(transcript: string, isFinal: boolean): void {
@@ -1682,7 +1685,8 @@ export class Widget {
     private updateMicButton(): void {
         if (!this.micButton) return;
 
-        const state = this.stt.getState();
+        // Before STT is loaded, show idle mic (click will lazy-init Whisper).
+        const state = this.stt?.getState() ?? 'idle';
         const micIdle = this.micButton.querySelector('.mic-idle') as HTMLElement;
         const micActive = this.micButton.querySelector('.mic-active') as HTMLElement;
 
