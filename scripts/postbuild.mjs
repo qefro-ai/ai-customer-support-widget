@@ -17,4 +17,8 @@ const { version } = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8'))
 copyFileSync(iife, join(dist, 'widget.cdn.js'));
 copyFileSync(iife, join(dist, `widget@${version}.js`));
 
-console.log(`postbuild: widget.cdn.js + widget@${version}.js ready`);
+// E2E smoke host expects the IIFE beside the HTML fixture
+const e2eFixture = join(root, 'e2e', 'fixtures', 'widget.iife.js');
+copyFileSync(iife, e2eFixture);
+
+console.log(`postbuild: widget.cdn.js + widget@${version}.js + e2e fixture ready`);

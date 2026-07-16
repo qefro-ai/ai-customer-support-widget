@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Qefro Widget Smoke</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: system-ui, sans-serif;
+        min-height: 100vh;
+        background: #f5f5f5;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Widget smoke host</h1>
+    <!-- Built IIFE is copied next to this fixture before serve -->
+    <script
+      id="qefro-widget-script"
+      src="./widget.iife.js"
+      data-token="smoke-test-token"
+      data-endpoint="http://127.0.0.1:9"
+      data-theme="light"
+      data-position="bottom-right"
+    ></script>
+  </body>
+</html>

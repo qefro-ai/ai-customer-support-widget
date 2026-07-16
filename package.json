@@ -40,9 +40,12 @@
     "build": "vite build && node scripts/postbuild.mjs",
     "prepublishOnly": "npm run build",
     "preview": "vite preview",
-    "test": "npx --yes tsx --test src/identity.test.ts"
+    "test": "npx --yes tsx --test src/identity.test.ts",
+    "test:e2e": "playwright test",
+    "test:e2e:install": "node scripts/install-obscura.mjs"
   },
   "devDependencies": {
+    "@playwright/test": "^1.54.2",
     "@types/dompurify": "^3.0.5",
     "terser": "^5.44.1",
     "typescript": "^5.9.3",
