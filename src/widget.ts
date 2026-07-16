@@ -127,7 +127,7 @@ export class Widget {
         this.inlineStatus = this.container.querySelector('.ai-widget-inline-status')!;
         this.micButton = this.container.querySelector('.ai-widget-mic');
 
-        // Whisper STT (~22MB WASM) is lazy-loaded on first mic click via ensureStt().
+        // Server STT is configured lazily on first mic click via ensureStt().
 
         // Initialize TTS
         this.tts = new TTSController({
@@ -1611,13 +1611,15 @@ export class Widget {
         this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
     }
 
-    /** Lazily construct Whisper STT on first use so embed pages avoid the WASM download. */
+    /** Lazily construct server STT on first mic use (no browser model download). */
     private ensureStt(): WhisperSTT {
         if (!this.stt) {
-            this.stt = new WhisperSTT(
-                './whisper.worker.ts',
-                this.config.speechLanguage || 'auto',
-            );
+            this.stt = new WhisperSTT({
+                apiUrl: this.config.endpoint,
+                apiToken: this.config.token,
+                workspaceId: this.config.workspaceId || null,
+                language: this.config.speechLanguage || 'auto',
+            });
             this.stt.setOnResult((transcript) => this.handleSTTResult(transcript, true));
             this.stt.setOnStateChange(this.handleSTTStateChange.bind(this));
             this.stt.setLanguageHintProvider(() =>
@@ -1626,15 +1628,6 @@ export class Widget {
                     .slice(-6)
                     .map((m) => m.content),
             );
-            this.stt.setOnProgress((progress) => {
-                if (progress < 0) {
-                    this.showStatus('Loading Whisper STT from cache...', 'info');
-                } else if (progress >= 100) {
-                    this.showStatus('Initializing model... (this takes a moment)', 'info');
-                } else {
-                    this.showStatus(`Downloading Whisper STT model... ${Math.round(progress)}%`, 'info');
-                }
-            });
         }
         return this.stt;
     }
@@ -1666,14 +1659,13 @@ export class Widget {
     private handleSTTStateChange(state: STTState): void {
         this.updateMicButton();
         if (state === 'loading') {
-            this.showStatus('Downloading Whisper STT model (~45MB)...', 'info');
+            this.showStatus('Preparing microphone...', 'info');
         } else if (state === 'ready') {
-            this.showStatus('Whisper STT ready', 'info');
-            setTimeout(() => this.showStatus(''), 2000);
+            this.showStatus('');
         } else if (state === 'listening') {
             this.showStatus('Listening...', 'info');
         } else if (state === 'processing') {
-            this.showStatus('Processing audio...', 'info');
+            this.showStatus('Transcribing...', 'info');
         } else if (state === 'error' || state === 'idle') {
             this.showStatus('');
         }
@@ -1694,7 +1686,7 @@ export class Widget {
     private updateMicButton(): void {
         if (!this.micButton) return;
 
-        // Before STT is loaded, show idle mic (click will lazy-init Whisper).
+        // Before STT is loaded, show idle mic (click will init server STT client).
         const state = this.stt?.getState() ?? 'idle';
         const micIdle = this.micButton.querySelector('.mic-idle') as HTMLElement;
         const micActive = this.micButton.querySelector('.mic-active') as HTMLElement;

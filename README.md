@@ -45,7 +45,17 @@ Or via jsDelivr after npm publish:
 | `data-primary-color` | no | Accent color |
 | `data-welcome-message` | no | First assistant message |
 | `data-workspace-id` | no | Scope retrieval to one workspace |
-| `data-speech-language` | no | Mic STT language: `auto` (default, multilingual) or a Whisper code like `ta`, `hi`, `ar`, `en` |
+| `data-speech-language` | no | Mic STT language sent to server Whisper: `auto` (default) or `ta`, `hi`, `ar`, `en`, … |
+
+## Voice (microphone)
+
+The widget records microphone audio in the browser and uploads it to
+`POST /api/v1/widget/stt` (server Whisper Base ONNX). No browser AI models,
+WASM, or ONNX Runtime Web are downloaded.
+
+- **Formats:** WebM Opus (preferred), WAV
+- **Max duration:** 60s (server-configurable via `STT_MAX_AUDIO_SECONDS`)
+- **Languages:** auto-detect, or force with `data-speech-language`
 | `data-context` | no | JSON string of extra context |
 
 ## npm

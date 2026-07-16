@@ -1,30 +1,71 @@
-import STTWorker from './whisper.worker?worker&inline';
+/**
+ * Server-side Speech-to-Text client.
+ *
+ * Browser only records microphone audio and POSTs it to
+ * `/api/v1/widget/stt` (Whisper Base ONNX on the llm-service).
+ * No WASM / Transformers.js / ONNX Runtime Web.
+ */
 
-export type WhisperSTTState = 'idle' | 'loading' | 'ready' | 'listening' | 'processing' | 'error' | 'unsupported';
+export type WhisperSTTState =
+    | 'idle'
+    | 'loading'
+    | 'ready'
+    | 'listening'
+    | 'processing'
+    | 'error'
+    | 'unsupported';
+
+export interface ServerSttConfig {
+    apiUrl: string;
+    apiToken: string;
+    workspaceId?: string | null;
+    language?: string;
+}
 
 export class WhisperSTT {
-    private worker: Worker | null = null;
     private state: WhisperSTTState = 'idle';
     private mediaRecorder: MediaRecorder | null = null;
     private audioChunks: Blob[] = [];
-    private decodeCtx: AudioContext | null = null;
     private onStateChange: ((state: WhisperSTTState) => void) | null = null;
     private onResult: ((transcript: string) => void) | null = null;
     private onProgress: ((progress: number) => void) | null = null;
     private languageHintProvider: (() => string[] | undefined) | null = null;
-    private transcribeStartedAt = 0;
-    private language?: string;
+    private language: string;
+    private apiUrl: string;
+    private apiToken: string;
+    private workspaceId: string | null;
+    private abortController: AbortController | null = null;
 
-    constructor(_workerPath?: string, language?: string) {
-        // Default "auto" so we never silently fall through to transformers.js English default.
-        this.language = language && language.trim() ? language : 'auto';
+    constructor(configOrWorkerPath?: string | ServerSttConfig, language?: string) {
+        // Back-compat: old signature was (workerPath?, language?)
+        if (configOrWorkerPath && typeof configOrWorkerPath === 'object') {
+            this.apiUrl = configOrWorkerPath.apiUrl.replace(/\/$/, '');
+            this.apiToken = configOrWorkerPath.apiToken;
+            this.workspaceId = configOrWorkerPath.workspaceId ?? null;
+            this.language =
+                (configOrWorkerPath.language || language || 'auto').trim() || 'auto';
+        } else {
+            this.apiUrl = '';
+            this.apiToken = '';
+            this.workspaceId = null;
+            this.language = (language || 'auto').trim() || 'auto';
+        }
         this.checkSupport();
+    }
+
+    configure(config: ServerSttConfig) {
+        this.apiUrl = config.apiUrl.replace(/\/$/, '');
+        this.apiToken = config.apiToken;
+        this.workspaceId = config.workspaceId ?? null;
+        if (config.language) {
+            this.language = config.language.trim() || 'auto';
+        }
     }
 
     private checkSupport() {
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
             this.setState('unsupported');
-            console.error('[WhisperSTT] MediaDevices API not supported');
+            console.error('[STT] MediaDevices API not supported');
         }
     }
 
@@ -51,7 +92,7 @@ export class WhisperSTT {
         this.language = language && language.trim() ? language : 'auto';
     }
 
-    /** Optional recent chat texts used as a fallback language hint when audio detect is weak. */
+    /** Kept for API compat; server Whisper handles language detection. */
     setLanguageHintProvider(provider: (() => string[] | undefined) | null) {
         this.languageHintProvider = provider;
     }
@@ -61,59 +102,23 @@ export class WhisperSTT {
     }
 
     async init() {
-        if (this.state !== 'idle' && this.state !== 'error') return;
-
-        this.setState('loading');
-
-        return new Promise<void>((resolve, reject) => {
-            const worker = new STTWorker();
-            this.worker = worker;
-
-            worker.addEventListener('message', (event) => {
-                const message = event.data;
-
-                if (message.status === 'ready') {
-                    this.setState('ready');
-                    resolve();
-                } else if (message.status === 'complete') {
-                    const elapsed = this.transcribeStartedAt
-                        ? (performance.now() - this.transcribeStartedAt).toFixed(0)
-                        : '?';
-                    console.debug(`[WhisperSTT] transcription complete in ${elapsed}ms`);
-                    if (this.onResult && message.text) {
-                        this.onResult(message.text.trim());
-                    }
-                    this.setState('ready');
-                } else if (message.status === 'error') {
-                    console.error('[WhisperSTT Worker Error]', message.error);
-                    this.setState('error');
-                    reject(new Error(message.error));
-                } else if (message.status === 'progress') {
-                    if (this.onProgress && typeof message.progress === 'number') {
-                        // Negative progress signals cache hit for UI copy
-                        if (message.cached) {
-                            this.onProgress(-1);
-                        } else {
-                            this.onProgress(message.progress);
-                        }
-                    }
-                }
-            });
-
-            worker.postMessage({ type: 'load' });
-        });
-    }
-
-    private getDecodeContext(): AudioContext {
-        if (!this.decodeCtx || this.decodeCtx.state === 'closed') {
-            this.decodeCtx = new AudioContext({ sampleRate: 16000 });
+        if (this.state === 'unsupported') return;
+        if (!this.apiUrl || !this.apiToken) {
+            this.setState('error');
+            throw new Error('STT API URL/token not configured');
         }
-        return this.decodeCtx;
+        // No model download — ready immediately.
+        this.setState('ready');
+        this.onProgress?.(100);
     }
 
     async start() {
         try {
-            // Prefer low-latency mono capture when the browser supports constraints
+            if (this.state === 'idle' || this.state === 'error') {
+                this.setState('loading');
+                await this.init();
+            }
+
             const stream = await navigator.mediaDevices.getUserMedia({
                 audio: {
                     channelCount: 1,
@@ -123,18 +128,17 @@ export class WhisperSTT {
                 },
             });
 
-            if (this.state === 'idle' || this.state === 'error') {
-                await this.init();
-            }
-
-            if (this.state !== 'ready') {
-                stream.getTracks().forEach(t => t.stop());
+            if (this.state !== 'ready' && this.state !== 'loading') {
+                stream.getTracks().forEach((t) => t.stop());
                 return;
             }
+            this.setState('ready');
 
             const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
                 ? 'audio/webm;codecs=opus'
-                : undefined;
+                : MediaRecorder.isTypeSupported('audio/webm')
+                  ? 'audio/webm'
+                  : undefined;
             this.mediaRecorder = mimeType
                 ? new MediaRecorder(stream, { mimeType })
                 : new MediaRecorder(stream);
@@ -148,7 +152,7 @@ export class WhisperSTT {
 
             this.mediaRecorder.onstop = async () => {
                 this.setState('processing');
-                stream.getTracks().forEach(track => track.stop());
+                stream.getTracks().forEach((track) => track.stop());
 
                 try {
                     if (this.audioChunks.length === 0) {
@@ -159,49 +163,83 @@ export class WhisperSTT {
                     const audioBlob = new Blob(this.audioChunks, {
                         type: this.mediaRecorder?.mimeType || 'audio/webm',
                     });
-                    const arrayBuffer = await audioBlob.arrayBuffer();
-
-                    if (arrayBuffer.byteLength === 0) {
+                    if (audioBlob.size === 0) {
                         this.setState('ready');
                         return;
                     }
 
-                    const audioContext = this.getDecodeContext();
-                    const audioBuffer = await audioContext.decodeAudioData(arrayBuffer.slice(0));
-                    // Copy channel data into a transferable buffer (zero-copy to worker)
-                    const channel = audioBuffer.getChannelData(0);
-                    const audioData = new Float32Array(channel.length);
-                    audioData.set(channel);
-
-                    this.transcribeStartedAt = performance.now();
-                    let hintTexts: string[] | undefined;
+                    // Touch hint provider so callers still wire it (unused server-side).
                     try {
-                        hintTexts = this.languageHintProvider?.() ?? undefined;
+                        this.languageHintProvider?.();
                     } catch {
-                        hintTexts = undefined;
+                        /* ignore */
                     }
-                    this.worker?.postMessage(
-                        {
-                            type: 'transcribe',
-                            audio: audioData,
-                            language: this.language || 'auto',
-                            hintTexts,
-                        },
-                        [audioData.buffer]
-                    );
-                } catch (error) {
-                    console.error('[WhisperSTT] Failed to process audio', error);
+
+                    const text = await this.uploadAndTranscribe(audioBlob);
+                    if (text && this.onResult) {
+                        this.onResult(text);
+                    }
                     this.setState('ready');
+                } catch (error) {
+                    console.error('[STT] Failed to process audio', error);
+                    this.setState('error');
+                    setTimeout(() => {
+                        if (this.state === 'error') this.setState('ready');
+                    }, 1500);
                 }
             };
 
-            // Timeslice keeps chunks flowing; stop() still finalizes the blob
             this.mediaRecorder.start(250);
             this.setState('listening');
         } catch (error) {
-            console.error('[WhisperSTT] Failed to start recording', error);
+            console.error('[STT] Failed to start recording', error);
             this.setState('error');
         }
+    }
+
+    private async uploadAndTranscribe(blob: Blob): Promise<string> {
+        if (!this.apiUrl || !this.apiToken) {
+            throw new Error('STT not configured');
+        }
+
+        const form = new FormData();
+        const ext = blob.type.includes('ogg')
+            ? 'ogg'
+            : blob.type.includes('wav')
+              ? 'wav'
+              : 'webm';
+        form.append('audio', blob, `recording.${ext}`);
+        form.append('language', this.language || 'auto');
+
+        this.abortController?.abort();
+        this.abortController = new AbortController();
+
+        const t0 = performance.now();
+        const response = await fetch(`${this.apiUrl}/api/v1/widget/stt`, {
+            method: 'POST',
+            headers: {
+                Authorization: `Bearer ${this.apiToken}`,
+                ...(this.workspaceId ? { 'X-Workspace-ID': this.workspaceId } : {}),
+            },
+            body: form,
+            signal: this.abortController.signal,
+        });
+
+        if (!response.ok) {
+            const detail = await response.text().catch(() => '');
+            throw new Error(`STT ${response.status}: ${detail.slice(0, 200)}`);
+        }
+
+        const json = (await response.json()) as {
+            text?: string;
+            language?: string;
+            processing_ms?: number;
+        };
+        console.debug(
+            `[STT] transcription complete in ${(performance.now() - t0).toFixed(0)}ms ` +
+                `(server ${json.processing_ms ?? '?'}ms, lang=${json.language ?? '?'})`,
+        );
+        return (json.text || '').trim();
     }
 
     stop() {
@@ -214,7 +252,7 @@ export class WhisperSTT {
         if (this.state === 'listening') {
             this.stop();
         } else if (this.state === 'loading' || this.state === 'processing') {
-            console.log('[WhisperSTT] Ignoring toggle during ' + this.state);
+            console.log('[STT] Ignoring toggle during ' + this.state);
         } else {
             this.start();
         }
@@ -224,12 +262,7 @@ export class WhisperSTT {
         if (this.mediaRecorder && this.state === 'listening') {
             this.mediaRecorder.stop();
         }
-        if (this.worker) {
-            this.worker.terminate();
-        }
-        if (this.decodeCtx) {
-            this.decodeCtx.close();
-            this.decodeCtx = null;
-        }
+        this.abortController?.abort();
+        this.abortController = null;
     }
 }

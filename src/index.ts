@@ -77,7 +77,7 @@ export interface WidgetConfig {
     welcomeMessage: string;
     workspaceId?: string;
     /**
-     * Whisper language for mic STT.
+     * Preferred language for server STT (`POST /api/v1/widget/stt`).
      * Use `"auto"` (default) for multilingual detection per utterance.
      * Or force a code such as `"ta"`, `"hi"`, `"ar"`, `"en"`.
      */
