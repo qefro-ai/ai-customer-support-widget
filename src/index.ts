@@ -90,7 +90,10 @@ function autoInit(scriptElement: HTMLScriptElement | null): void {
     try {
         const config = getConfig(scriptElement);
         injectStyles(config);
-        new Widget(config);
+        const instance = new Widget(config);
+        // Expose for host pages / demos (widget.identify, etc.)
+        ;(window as unknown as { QefroWidget?: Widget }).QefroWidget = instance
+        ;(window as unknown as { AIWidget?: Widget }).AIWidget = instance
     } catch (error) {
         console.error('AI Widget initialization failed:', error);
     }

@@ -667,13 +667,13 @@ export class Widget {
         container.className = `ai-widget ${this.config.theme} ${this.config.position}`;
 
         container.innerHTML = `
-      <button class="ai-widget-trigger" aria-label="Open chat" aria-expanded="false" aria-controls="ai-widget-panel">
+      <button class="ai-widget-trigger" data-testid="widget-trigger" aria-label="Open chat" aria-expanded="false" aria-controls="ai-widget-panel">
         <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
         </svg>
         <span class="ai-widget-badge" style="display: none;">1</span>
       </button>
-      <div class="ai-widget-panel" id="ai-widget-panel" role="dialog" aria-modal="true" aria-label="Chat assistant">
+      <div class="ai-widget-panel" id="ai-widget-panel" data-testid="widget-panel" role="dialog" aria-modal="true" aria-label="Chat assistant">
         <div class="ai-widget-header">
           <span class="ai-widget-header-title">AI Assistant</span>
           <div class="ai-widget-header-actions">
@@ -696,7 +696,7 @@ export class Widget {
                 <path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"></path>
               </svg>
             </button>
-            <button class="ai-widget-close" aria-label="Close chat">
+            <button class="ai-widget-close" data-testid="widget-close" aria-label="Close chat">
               <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
                 <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -717,7 +717,7 @@ export class Widget {
         </div>
         <div class="ai-widget-inline-status" aria-live="polite"></div>
         <div class="ai-widget-input-container">
-          <button class="ai-widget-mic" aria-label="Voice input" title="Click to speak">
+          <button class="ai-widget-mic" data-testid="widget-mic" aria-label="Voice input" title="Click to speak">
             <svg class="mic-idle" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"></path>
               <path d="M19 10v2a7 7 0 0 1-14 0v-2"></path>
@@ -733,10 +733,11 @@ export class Widget {
           </button>
           <textarea 
             class="ai-widget-input" 
+            data-testid="widget-input"
             placeholder="Type or speak your message..." 
             rows="1"
           ></textarea>
-          <button class="ai-widget-send" aria-label="Send message">
+          <button class="ai-widget-send" data-testid="widget-send" aria-label="Send message">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="22" y1="2" x2="11" y2="13"></line>
               <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
