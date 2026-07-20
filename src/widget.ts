@@ -1536,28 +1536,95 @@ export class Widget {
         // 1. Handle code blocks (```code```)
         let formatted = content.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
 
-        // 2. Handle unordered lists (- item or * item)
-        // Ensure we don't break existing tags or over-match
+        // 2. GFM pipe tables → card-style HTML tables (Business Tool results)
+        formatted = this.formatMarkdownTables(formatted);
+
+        // 3. Handle unordered lists (- item or * item)
         formatted = formatted.replace(/^(?:\*|-)\s+(.+)$/gm, '<li>$1</li>');
-        // Wrap contiguous li tags in ul
         formatted = formatted.replace(/(?:<li>.*<\/li>\n?)+/g, (match) => `<ul>${match}</ul>`);
 
-        // 3. Handle bold, italic, inline code (only if not inside code block)
-        // This is simplified; true markdown parsing is complex
+        // 4. Handle bold, italic, inline code, links
         formatted = formatted
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
             .replace(/`([^`]+)`/g, '<code>$1</code>')
             .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
 
-        // 4. Handle newlines mapping to <br> (but not inside pre blocks)
-        // We'll split by <pre> blocks and only apply to other parts
-        const parts = formatted.split(/(<pre>[\s\S]*?<\/pre>)/);
+        // 5. Newlines → <br> outside pre/table
+        const parts = formatted.split(/(<pre>[\s\S]*?<\/pre>|<div class="ai-widget-tool-card">[\s\S]*?<\/div>)/);
         const result = parts.map(part => {
-            if (part.startsWith('<pre>')) return part;
+            if (part.startsWith('<pre>') || part.startsWith('<div class="ai-widget-tool-card">')) return part;
             return part.replace(/\n/g, '<br>');
         }).join('').trim();
-        return DOMPurify.sanitize(result, { ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'br', 'a', 'ul', 'li'], ALLOWED_ATTR: ['href', 'target', 'rel'] });
+        return DOMPurify.sanitize(result, {
+            ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'br', 'a', 'ul', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'h3'],
+            ALLOWED_ATTR: ['href', 'target', 'rel', 'class'],
+        });
+    }
+
+    /** Convert GFM pipe tables into styled card tables for Business Tool results. */
+    private formatMarkdownTables(content: string): string {
+        const lines = content.split(/\r?\n/);
+        const out: string[] = [];
+        let i = 0;
+
+        const splitRow = (line: string): string[] => {
+            const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
+            return trimmed.split('|').map((c) => c.trim());
+        };
+        const isSep = (line: string): boolean => {
+            const cells = splitRow(line);
+            return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c));
+        };
+
+        while (i < lines.length) {
+            const headerLine = lines[i];
+            const sepLine = lines[i + 1];
+            if (
+                headerLine &&
+                sepLine &&
+                headerLine.includes('|') &&
+                isSep(sepLine) &&
+                splitRow(headerLine).length >= 2
+            ) {
+                const headers = splitRow(headerLine);
+                const rows: string[][] = [];
+                let j = i + 2;
+                while (j < lines.length && lines[j].includes('|') && !isSep(lines[j])) {
+                    const cells = splitRow(lines[j]);
+                    if (cells.some((c) => c.length > 0)) {
+                        rows.push(headers.map((_, idx) => cells[idx] ?? ''));
+                    }
+                    j++;
+                }
+                if (rows.length > 0) {
+                    const thead = headers
+                        .map((h) => `<th>${h.replace(/`([^`]+)`/g, '$1')}</th>`)
+                        .join('');
+                    const tbody = rows
+                        .map(
+                            (row) =>
+                                `<tr>${row
+                                    .map((c, ci) => {
+                                        const text = c.replace(/`([^`]+)`/g, '$1');
+                                        return ci === 0
+                                            ? `<td><code>${text}</code></td>`
+                                            : `<td>${text}</td>`;
+                                    })
+                                    .join('')}</tr>`,
+                        )
+                        .join('');
+                    out.push(
+                        `<div class="ai-widget-tool-card"><table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table></div>`,
+                    );
+                    i = j;
+                    continue;
+                }
+            }
+            out.push(lines[i]);
+            i++;
+        }
+        return out.join('\n');
     }
 
     private typingInterval: number | null = null;

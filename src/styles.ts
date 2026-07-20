@@ -456,6 +456,50 @@ function buildStyles(config: WidgetConfig): string {
       color: white;
     }
 
+    .ai-widget-tool-card {
+      margin: 10px 0 4px;
+      overflow-x: auto;
+      border-radius: 12px;
+      border: 1px solid var(--ai-border);
+      background: var(--ai-bg-primary, #fff);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    }
+
+    .ai-widget-tool-card table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 12.5px;
+      line-height: 1.4;
+    }
+
+    .ai-widget-tool-card th {
+      text-align: left;
+      padding: 8px 10px;
+      background: rgba(0, 0, 0, 0.04);
+      border-bottom: 1px solid var(--ai-border);
+      font-weight: 600;
+      white-space: nowrap;
+      color: var(--ai-text);
+    }
+
+    .ai-widget-tool-card td {
+      padding: 8px 10px;
+      border-bottom: 1px solid rgba(0, 0, 0, 0.05);
+      white-space: nowrap;
+      color: var(--ai-text);
+    }
+
+    .ai-widget-tool-card tr:last-child td {
+      border-bottom: none;
+    }
+
+    .ai-widget-tool-card code {
+      font-size: 11.5px;
+      padding: 1px 5px;
+      border-radius: 4px;
+      background: rgba(0, 0, 0, 0.06);
+    }
+
     .ai-widget-sources {
       margin-top: 8px;
       padding: 0 4px;
