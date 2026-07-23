@@ -29,9 +29,58 @@ function buildStyles(config: WidgetConfig): string {
       --ai-text: ${config.theme === 'dark' ? '#e4e4e7' : '#18181b'};
       --ai-text-secondary: ${config.theme === 'dark' ? '#a1a1aa' : '#71717a'};
       --ai-border: ${config.theme === 'dark' ? 'rgba(255, 255, 255, 0.08)' : 'rgba(0, 0, 0, 0.08)'};
+      /* Theme-aware danger colors — a fixed light-salmon text failed contrast on the light theme */
+      --ai-danger-text: ${config.theme === 'dark' ? '#fca5a5' : '#b91c1c'};
+      --ai-danger-bg: ${config.theme === 'dark' ? 'rgba(239, 68, 68, 0.14)' : 'rgba(239, 68, 68, 0.08)'};
       position: fixed;
       z-index: 999999;
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+
+    /* Defensive isolation: keep host-page box-sizing resets from distorting widths/heights */
+    #ai-widget-container,
+    #ai-widget-container *,
+    #ai-widget-container *::before,
+    #ai-widget-container *::after {
+      box-sizing: border-box;
+    }
+
+    #ai-widget-container svg {
+      flex-shrink: 0;
+    }
+
+    /* Keyboard focus visibility — host pages frequently strip default outlines globally */
+    #ai-widget-container button:focus-visible,
+    #ai-widget-container a:focus-visible,
+    #ai-widget-container textarea:focus-visible,
+    #ai-widget-container input:focus-visible {
+      outline: 2px solid var(--ai-primary);
+      outline-offset: 2px;
+    }
+
+    #ai-widget-container .ai-widget-header button:focus-visible,
+    #ai-widget-container .ai-widget-trigger:focus-visible {
+      outline: 2px solid white;
+      outline-offset: 2px;
+    }
+
+    /* Respect reduced-motion preference across all widget animations/transitions */
+    @media (prefers-reduced-motion: reduce) {
+      #ai-widget-container * {
+        animation-duration: 0.001ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.001ms !important;
+        scroll-behavior: auto !important;
+      }
+    }
+
+    .ai-widget-sr-announcer {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+      white-space: nowrap;
     }
 
     #ai-widget-container.bottom-right {
@@ -115,7 +164,11 @@ function buildStyles(config: WidgetConfig): string {
 
     #ai-widget-container.open .ai-widget-panel {
       display: flex;
-      animation: ai-slide-in 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+      animation: ai-slide-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+    }
+
+    #ai-widget-container.open.closing .ai-widget-panel {
+      animation: ai-slide-out 0.18s cubic-bezier(0.4, 0, 1, 1) forwards;
     }
 
     @keyframes ai-slide-in {
@@ -126,6 +179,17 @@ function buildStyles(config: WidgetConfig): string {
       to {
         opacity: 1;
         transform: translateY(0) scale(1);
+      }
+    }
+
+    @keyframes ai-slide-out {
+      from {
+        opacity: 1;
+        transform: translateY(0) scale(1);
+      }
+      to {
+        opacity: 0;
+        transform: translateY(12px) scale(0.97);
       }
     }
 
@@ -195,7 +259,7 @@ function buildStyles(config: WidgetConfig): string {
       background: var(--ai-bg);
     }
 
-    #ai-widget-container.inbox-open .ai-widget-messages,
+    #ai-widget-container.inbox-open .ai-widget-messages-wrap,
     #ai-widget-container.inbox-open .ai-widget-input-container {
       display: none;
     }
@@ -315,19 +379,71 @@ function buildStyles(config: WidgetConfig): string {
       opacity: 0.8;
       transition: opacity 0.2s;
       padding: 4px;
+      min-width: 32px;
+      min-height: 32px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      border-radius: 6px;
     }
 
     .ai-widget-close:hover {
       opacity: 1;
     }
 
+    .ai-widget-messages-wrap {
+      position: relative;
+      flex: 1;
+      min-height: 0;
+      display: flex;
+      flex-direction: column;
+    }
+
     .ai-widget-messages {
       flex: 1;
+      min-height: 0;
       overflow-y: auto;
       padding: 16px;
       display: flex;
       flex-direction: column;
       gap: 12px;
+    }
+
+    .ai-widget-scroll-bottom {
+      position: absolute;
+      bottom: 12px;
+      left: 50%;
+      transform: translateX(-50%) translateY(8px);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 14px;
+      border-radius: 999px;
+      border: 1px solid var(--ai-border);
+      background: var(--ai-bg);
+      color: var(--ai-text);
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.14);
+      opacity: 0;
+      visibility: hidden;
+      pointer-events: none;
+      transition: opacity 0.2s ease, transform 0.2s ease, visibility 0.2s;
+      z-index: 5;
+    }
+
+    .ai-widget-scroll-bottom.visible {
+      opacity: 1;
+      visibility: visible;
+      pointer-events: auto;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .ai-widget-scroll-bottom:hover {
+      background: var(--ai-bg-secondary);
+      border-color: var(--ai-primary);
+      color: var(--ai-primary);
     }
 
     .ai-widget-message {
@@ -336,14 +452,38 @@ function buildStyles(config: WidgetConfig): string {
       position: relative;
     }
 
+    /* Anchors the copy button to the bubble itself, not the whole message —
+       otherwise it drifts over the timestamp/feedback/retry rows stacked below. */
+    .ai-widget-message-body {
+      position: relative;
+    }
+
+    .ai-widget-message-time {
+      margin-top: 3px;
+      padding: 0 4px;
+      font-size: 10.5px;
+      color: var(--ai-text-secondary);
+      opacity: 0.8;
+    }
+
+    .ai-widget-message.user .ai-widget-message-time {
+      text-align: right;
+    }
+
+    .ai-widget-message.assistant .ai-widget-message-time {
+      text-align: left;
+    }
+
     .ai-widget-message-copy-btn {
       position: absolute;
       bottom: -12px;
       right: 0;
-      background: var(--ai-bg-primary);
+      min-width: 26px;
+      min-height: 26px;
+      background: var(--ai-bg-secondary);
       border: 1px solid var(--ai-border);
-      color: var(--ai-text-muted);
-      border-radius: 4px;
+      color: var(--ai-text-secondary);
+      border-radius: 6px;
       padding: 4px;
       cursor: pointer;
       opacity: 0;
@@ -461,7 +601,7 @@ function buildStyles(config: WidgetConfig): string {
       overflow-x: auto;
       border-radius: 12px;
       border: 1px solid var(--ai-border);
-      background: var(--ai-bg-primary, #fff);
+      background: var(--ai-bg-secondary);
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
     }
 
@@ -645,8 +785,9 @@ function buildStyles(config: WidgetConfig): string {
     }
 
     .ai-widget-inline-status.error {
-      background: rgba(239, 68, 68, 0.08);
-      color: #fca5a5;
+      background: var(--ai-danger-bg);
+      color: var(--ai-danger-text);
+      font-weight: 500;
     }
 
     .ai-widget-inline-status.info {
@@ -935,7 +1076,7 @@ function buildStyles(config: WidgetConfig): string {
       padding: 10px;
       border: none;
       background: transparent;
-      color: var(--ai-text-muted, #94a3b8);
+      color: var(--ai-text-secondary);
       font-size: 13px;
       font-weight: 500;
       cursor: pointer;
@@ -991,6 +1132,8 @@ function buildStyles(config: WidgetConfig): string {
       opacity: 0.85;
       transition: opacity 0.2s, transform 0.2s, background 0.2s;
       padding: 4px;
+      min-width: 32px;
+      min-height: 32px;
       border-radius: 6px;
       display: flex;
       align-items: center;
@@ -1027,6 +1170,8 @@ function buildStyles(config: WidgetConfig): string {
       color: var(--ai-text-secondary);
       border-radius: 6px;
       padding: 4px 6px;
+      min-width: 30px;
+      min-height: 30px;
       cursor: pointer;
       display: flex;
       align-items: center;
@@ -1056,6 +1201,34 @@ function buildStyles(config: WidgetConfig): string {
     .ai-widget-feedback-btn:disabled {
       cursor: not-allowed;
       opacity: 0.7;
+    }
+
+    .ai-widget-retry-btn {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 8px;
+      padding: 6px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--ai-border);
+      background: var(--ai-bg-secondary);
+      color: var(--ai-text);
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .ai-widget-retry-btn:hover {
+      border-color: var(--ai-primary);
+      color: var(--ai-primary);
+      transform: translateY(-1px);
+    }
+
+    .ai-widget-retry-btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+      transform: none;
     }
 
     .ai-widget-handoff-container {

@@ -98,6 +98,12 @@ export class Widget {
     private ttsButton: HTMLButtonElement | null = null;
     private unreadCount = 0;  // Track unread messages for badge
     private badge: HTMLElement | null = null;
+    private scrollBottomButton: HTMLButtonElement | null = null;
+    private srAnnouncer: HTMLElement | null = null;
+    /** Whether the messages list is scrolled near the bottom — gates auto-scroll vs. the "new messages" pill */
+    private isNearBottom = true;
+    /** Snapshot of the last user message sent, used to power the "Try again" retry action */
+    private lastSentContent: string | null = null;
     /** End-user identity from identify() — separate from setContext() */
     private identity: WidgetIdentity | null = null;
     private settings: {
@@ -126,6 +132,8 @@ export class Widget {
         this.sendButton = this.container.querySelector('.ai-widget-send')!;
         this.inlineStatus = this.container.querySelector('.ai-widget-inline-status')!;
         this.micButton = this.container.querySelector('.ai-widget-mic');
+        this.scrollBottomButton = this.container.querySelector('.ai-widget-scroll-bottom');
+        this.srAnnouncer = this.container.querySelector('.ai-widget-sr-announcer');
 
         // Server STT is configured lazily on first mic click via ensureStt().
 
@@ -711,7 +719,16 @@ export class Widget {
             <span class="ai-widget-inbox-badge" style="display:none">0</span>
           </button>
         </div>
-        <div class="ai-widget-messages"></div>
+        <div class="ai-widget-messages-wrap">
+          <div class="ai-widget-messages" role="region" aria-label="Conversation"></div>
+          <button type="button" class="ai-widget-scroll-bottom" aria-label="Scroll to latest messages">
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19"></line>
+              <polyline points="19 12 12 19 5 12"></polyline>
+            </svg>
+            New messages
+          </button>
+        </div>
         <div class="ai-widget-inbox-panel" aria-hidden="true">
           <div class="ai-widget-inbox-list"></div>
         </div>
@@ -735,6 +752,7 @@ export class Widget {
             class="ai-widget-input" 
             data-testid="widget-input"
             placeholder="Type or speak your message..." 
+            aria-label="Message"
             rows="1"
           ></textarea>
           <button class="ai-widget-send" data-testid="widget-send" aria-label="Send message">
@@ -748,6 +766,7 @@ export class Widget {
           Powered by Qefro AI • v${__WIDGET_VERSION__}
         </div>
       </div>
+      <div class="ai-widget-sr-announcer" aria-live="polite" role="status"></div>
     `;
 
         document.body.appendChild(container);
@@ -765,8 +784,8 @@ export class Widget {
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape' && this.isOpen) {
                 e.preventDefault();
+                // close() returns focus to the trigger itself once its exit animation finishes.
                 this.close();
-                (trigger as HTMLElement).focus();
             }
         });
 
@@ -818,6 +837,32 @@ export class Widget {
             this.input.style.height = Math.min(this.input.scrollHeight, 120) + 'px';
             this.updateSendButtonState();
         });
+
+        // Track scroll position so incoming messages don't yank focus away from history the user is reading
+        this.messagesContainer.addEventListener('scroll', () => this.handleMessagesScroll());
+
+        this.scrollBottomButton?.addEventListener('click', () => {
+            this.isNearBottom = true;
+            const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
+            this.messagesContainer.scrollTo({
+                top: this.messagesContainer.scrollHeight,
+                behavior: reduceMotion ? 'auto' : 'smooth',
+            });
+            this.setScrollButtonVisible(false);
+        });
+    }
+
+    private handleMessagesScroll(): void {
+        const el = this.messagesContainer;
+        const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+        this.isNearBottom = distanceFromBottom < 64;
+        if (this.isNearBottom) {
+            this.setScrollButtonVisible(false);
+        }
+    }
+
+    private setScrollButtonVisible(visible: boolean): void {
+        this.scrollBottomButton?.classList.toggle('visible', visible);
     }
 
     private updateSendButtonState(): void {
@@ -861,30 +906,58 @@ export class Widget {
     }
 
     private toggle(): void {
-        this.isOpen = !this.isOpen;
-        this.container.classList.toggle('open', this.isOpen);
-        const trigger = this.container.querySelector('.ai-widget-trigger');
-        trigger?.setAttribute('aria-expanded', this.isOpen ? 'true' : 'false');
         if (this.isOpen) {
-            if (!this.settings?.leadCaptureEnabled || this.isLeadSubmitted) {
-                this.input.focus();
-                this.connectWebSocket().catch(() => {
-                    // HTTP fallback is used on send; ignore open-time WS failures
-                });
-            } else {
-                const nameInput = this.container.querySelector('#lead-name') as HTMLInputElement;
-                nameInput?.focus();
-            }
-            // Clear unread count when opened
-            this.unreadCount = 0;
-            this.updateBadge();
+            this.close();
+        } else {
+            this.openPanel();
         }
     }
 
+    private openPanel(): void {
+        this.isOpen = true;
+        this.container.classList.remove('closing');
+        this.container.classList.add('open');
+        const trigger = this.container.querySelector('.ai-widget-trigger');
+        trigger?.setAttribute('aria-expanded', 'true');
+        if (!this.settings?.leadCaptureEnabled || this.isLeadSubmitted) {
+            this.input.focus();
+            this.connectWebSocket().catch(() => {
+                // HTTP fallback is used on send; ignore open-time WS failures
+            });
+        } else {
+            const nameInput = this.container.querySelector('#lead-name') as HTMLInputElement;
+            nameInput?.focus();
+        }
+        // Clear unread count when opened
+        this.unreadCount = 0;
+        this.updateBadge();
+    }
+
+    /** Plays a brief exit animation, then hides the panel and returns focus to the launcher (standard dialog a11y pattern). */
     private close(): void {
+        if (!this.isOpen) return;
         this.isOpen = false;
-        this.container.classList.remove('open');
+        this.container.classList.add('closing');
         this.container.querySelector('.ai-widget-trigger')?.setAttribute('aria-expanded', 'false');
+
+        const panel = this.container.querySelector('.ai-widget-panel');
+        const trigger = this.container.querySelector('.ai-widget-trigger') as HTMLElement | null;
+        let finished = false;
+        const finish = () => {
+            if (finished) return;
+            finished = true;
+            this.container.classList.remove('open', 'closing');
+            trigger?.focus();
+        };
+
+        const reduceMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false;
+        if (reduceMotion) {
+            finish();
+            return;
+        }
+        panel?.addEventListener('animationend', finish, { once: true });
+        // Safety net in case animationend never fires (e.g. panel was already hidden).
+        window.setTimeout(finish, 240);
     }
 
     private async fetchSettings(): Promise<void> {
@@ -1212,6 +1285,7 @@ export class Widget {
                     const lastMsg = this.messages[this.messages.length - 1];
                     if (!lastMsg || lastMsg.role !== 'assistant') {
                         // Spontaneous message from agent on active chat
+                        this.hideTypingIndicator();
                         this.addMessage({
                             id: `agent-reply-${Date.now()}`,
                             role: 'assistant',
@@ -1224,6 +1298,9 @@ export class Widget {
                             this.updateBadge();
                         }
                     } else {
+                        // First real token has arrived — drop the "Thinking..." indicator so it
+                        // doesn't sit stacked above the streaming reply for the rest of the response.
+                        this.hideTypingIndicator();
                         this.appendToLastMessage(response.content!);
                         this.tts.processText(response.content!);
                     }
@@ -1245,6 +1322,7 @@ export class Widget {
                     }
                     this.tts.onResponseComplete();
                     this.persistConversation();
+                    this.announceLastAssistantMessage();
                     const checkLastMsg = this.messages[this.messages.length - 1];
                     if (checkLastMsg && checkLastMsg.role === 'assistant' && 
                         checkLastMsg.content.includes("I don't have that specific information in my knowledge base.")) {
@@ -1265,6 +1343,7 @@ export class Widget {
                         content: 'Our AI is experiencing high volume. Please leave your email, or a human agent will be with you shortly.',
                         timestamp: new Date(),
                     });
+                    this.renderRetryButtonForLastMessage();
                     break;
 
                 case 'status':
@@ -1281,6 +1360,7 @@ export class Widget {
         if (!content || this.isTyping) return;
 
         this.setInlineStatus(null);
+        this.lastSentContent = content;
 
         // Add user message
         this.addMessage({
@@ -1381,6 +1461,9 @@ export class Widget {
                     if (line.startsWith('data: ')) {
                         const data: ChatResponse = JSON.parse(line.slice(6));
                         if (data.type === 'token') {
+                            // First real token has arrived — drop the "Thinking..." indicator so it
+                            // doesn't sit stacked above the streaming reply for the rest of the response.
+                            this.hideTypingIndicator();
                             this.appendToLastMessage(data.content || '');
                             this.tts.processText(data.content || '');
                         } else if (data.type === 'conversationId') {
@@ -1398,6 +1481,7 @@ export class Widget {
                             }
                             this.tts.onResponseComplete();
                             this.persistConversation();
+                            this.announceLastAssistantMessage();
                             const checkLastMsg = this.messages[this.messages.length - 1];
                             if (checkLastMsg && checkLastMsg.role === 'assistant' && 
                                 checkLastMsg.content.includes("I don't have that specific information in my knowledge base.")) {
@@ -1421,7 +1505,41 @@ export class Widget {
                 content: 'Our AI is experiencing high volume. Please leave your email, or a human agent will be with you shortly.',
                 timestamp: new Date(),
             });
+            this.renderRetryButtonForLastMessage();
         }
+    }
+
+    /** Adds a "Try again" action to a failure message so a flaky connection doesn't dead-end the conversation. */
+    private renderRetryButtonForLastMessage(): void {
+        const retryContent = this.lastSentContent;
+        if (!retryContent) return;
+
+        const lastMessage = this.messages[this.messages.length - 1];
+        if (!lastMessage || lastMessage.role !== 'assistant') return;
+
+        const el = this.messagesContainer.querySelector(`[data-id="${lastMessage.id}"]`);
+        if (!el || el.querySelector('.ai-widget-retry-btn')) return;
+
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'ai-widget-retry-btn';
+        btn.innerHTML = `
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="23 4 23 10 17 10"></polyline>
+                <polyline points="1 20 1 14 7 14"></polyline>
+                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4l-4.64 4.36A9 9 0 0 1 3.51 15"></path>
+            </svg>
+            Try again
+        `;
+        btn.addEventListener('click', () => {
+            if (this.isTyping) return;
+            btn.disabled = true;
+            this.input.value = retryContent;
+            this.updateSendButtonState();
+            void this.sendMessage();
+        });
+        el.appendChild(btn);
+        this.scrollToBottom(true);
     }
 
     private addMessage(message: Message, options: { persist?: boolean } = {}): void {
@@ -1443,9 +1561,13 @@ export class Widget {
             `;
         }
 
+        const timeStr = this.formatTime(message.timestamp);
         el.innerHTML = `
-            <div class="ai-widget-message-content" dir="auto">${this.formatContent(message.content)}</div>
-            ${copyBtnHtml}
+            <div class="ai-widget-message-body">
+                <div class="ai-widget-message-content" dir="auto">${this.formatContent(message.content)}</div>
+                ${copyBtnHtml}
+            </div>
+            ${timeStr ? `<div class="ai-widget-message-time">${timeStr}</div>` : ''}
         `;
 
         if (message.role === 'assistant') {
@@ -1472,10 +1594,22 @@ export class Widget {
         }
 
         this.messagesContainer.appendChild(el);
-        this.scrollToBottom();
+        this.scrollToBottom(message.role === 'user');
+
+        if (message.role === 'assistant' && message.content.trim()) {
+            this.announce(this.toPlainText(message.content));
+        }
 
         if (options.persist !== false) {
             this.persistConversation();
+        }
+    }
+
+    private formatTime(date: Date): string {
+        try {
+            return new Intl.DateTimeFormat(undefined, { hour: 'numeric', minute: '2-digit' }).format(date);
+        } catch {
+            return '';
         }
     }
 
@@ -1632,6 +1766,8 @@ export class Widget {
     private showTypingIndicator(): void {
         const indicator = document.createElement('div');
         indicator.className = 'ai-widget-typing';
+        indicator.setAttribute('role', 'status');
+        indicator.setAttribute('aria-live', 'polite');
         indicator.innerHTML = `
             <div class="ai-widget-status-text">Thinking...</div>
             <div class="ai-widget-typing-dots"><span></span><span></span><span></span></div>
@@ -1662,6 +1798,8 @@ export class Widget {
         if (!indicator) {
             indicator = document.createElement('div');
             indicator.className = 'ai-widget-typing';
+            indicator.setAttribute('role', 'status');
+            indicator.setAttribute('aria-live', 'polite');
             this.messagesContainer.appendChild(indicator);
         }
         indicator.replaceChildren();
@@ -1675,8 +1813,45 @@ export class Widget {
         this.scrollToBottom();
     }
 
-    private scrollToBottom(): void {
-        this.messagesContainer.scrollTop = this.messagesContainer.scrollHeight;
+    /** Auto-scrolls unless the user has scrolled up to read history — then just surfaces the "new messages" pill. */
+    private scrollToBottom(force = false): void {
+        const el = this.messagesContainer;
+        if (force || this.isNearBottom) {
+            el.scrollTop = el.scrollHeight;
+            this.isNearBottom = true;
+            this.setScrollButtonVisible(false);
+        } else {
+            this.setScrollButtonVisible(true);
+        }
+    }
+
+    /** Strips common markdown tokens so screen readers announce clean, spoken-friendly text. */
+    private toPlainText(content: string): string {
+        return content
+            .replace(/```[\s\S]*?```/g, ' ')
+            .replace(/`([^`]+)`/g, '$1')
+            .replace(/\*\*(.*?)\*\*/g, '$1')
+            .replace(/\*(.*?)\*/g, '$1')
+            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '$1')
+            .replace(/\n+/g, '. ')
+            .trim();
+    }
+
+    /** Polite live-region announcement for screen reader users — only while the panel is open, to avoid background noise. */
+    private announce(text: string): void {
+        if (!this.srAnnouncer || !text || !this.isOpen) return;
+        const el = this.srAnnouncer;
+        el.textContent = '';
+        window.setTimeout(() => {
+            el.textContent = text;
+        }, 50);
+    }
+
+    private announceLastAssistantMessage(): void {
+        const last = this.messages[this.messages.length - 1];
+        if (last && last.role === 'assistant' && last.content.trim()) {
+            this.announce(this.toPlainText(last.content));
+        }
     }
 
     /** Lazily construct server STT on first mic use (no browser model download). */
