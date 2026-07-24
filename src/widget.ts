@@ -117,7 +117,6 @@ export class Widget {
         handoffConfig?: {
             email_recipient?: string | null;
             whatsapp_number?: string | null;
-            has_webhook?: boolean;
             message?: string | null;
         } | null;
     } | null = null;
@@ -2086,15 +2085,6 @@ export class Widget {
             `;
         }
 
-        if (handoffConfig?.has_webhook) {
-            optionsHtml += `
-                <button class="ai-widget-handoff-btn ticket-trigger">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path><polyline points="14 2 14 8 20 8"></polyline><line x1="16" y1="13" x2="8" y2="13"></line><line x1="16" y1="17" x2="8" y2="17"></line><polyline points="10 9 9 9 8 9"></polyline></svg>
-                    Submit Ticket
-                </button>
-            `;
-        }
-
         optionsHtml += `
             <button class="ai-widget-handoff-btn live-agent">
                 <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M23 21v-2a4 4 0 0 0-3-3.87"></path><path d="M16 3.13a4 4 0 0 1 0 7.75"></path></svg>
@@ -2108,13 +2098,6 @@ export class Widget {
                 <div class="ai-widget-handoff-choices">
                     ${optionsHtml}
                 </div>
-                <div class="ai-widget-ticket-form" style="display: none; margin-top: 12px; width: 100%;">
-                    <textarea class="ai-widget-ticket-desc" placeholder="Describe your issue..." rows="3" style="width: 100%; box-sizing: border-box; padding: 8px; border-radius: 8px; border: 1px solid var(--ai-border); background: var(--ai-bg-secondary); color: var(--ai-text); resize: none; margin-bottom: 8px; font-family: inherit; font-size: 13px;"></textarea>
-                    <div style="display: flex; gap: 8px; justify-content: flex-end;">
-                        <button class="ai-widget-ticket-cancel" style="background: none; border: 1px solid var(--ai-border); color: var(--ai-text); padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">Cancel</button>
-                        <button class="ai-widget-ticket-submit" style="background: var(--ai-primary); border: none; color: white; padding: 4px 12px; border-radius: 6px; cursor: pointer; font-size: 12px;">Submit</button>
-                    </div>
-                </div>
             </div>
         `;
 
@@ -2125,70 +2108,6 @@ export class Widget {
         if (liveBtn) {
             liveBtn.addEventListener('click', () => {
                 this.requestLiveAgentTakeover(el);
-            });
-        }
-
-        const ticketBtn = el.querySelector('.ticket-trigger') as HTMLButtonElement;
-        if (ticketBtn) {
-            const ticketForm = el.querySelector('.ai-widget-ticket-form') as HTMLElement;
-            const choices = el.querySelector('.ai-widget-handoff-choices') as HTMLElement;
-            const cancelBtn = el.querySelector('.ai-widget-ticket-cancel') as HTMLButtonElement;
-            const submitBtn = el.querySelector('.ai-widget-ticket-submit') as HTMLButtonElement;
-            const descArea = el.querySelector('.ai-widget-ticket-desc') as HTMLTextAreaElement;
-
-            ticketBtn.addEventListener('click', () => {
-                choices.style.display = 'none';
-                ticketForm.style.display = 'block';
-                descArea.focus();
-            });
-
-            cancelBtn.addEventListener('click', () => {
-                ticketForm.style.display = 'none';
-                choices.style.display = 'flex';
-            });
-
-            submitBtn.addEventListener('click', async () => {
-                const desc = descArea.value.trim();
-                if (!desc) {
-                    descArea.classList.add('invalid');
-                    setTimeout(() => descArea.classList.remove('invalid'), 400);
-                    return;
-                }
-
-                submitBtn.disabled = true;
-                submitBtn.textContent = 'Submitting...';
-
-                try {
-                    if (this.conversationId) {
-                        await fetch(
-                            `${this.config.endpoint}/api/v1/widget/conversations/${this.conversationId}/handoff?session=${encodeURIComponent(this.visitorSession())}`,
-                            this.fetchInit({
-                            method: 'POST',
-                            headers: {
-                                'Content-Type': 'application/json',
-                                'x-widget-token': this.config.token,
-                                ...this.sessionHeaders(),
-                            },
-                            body: JSON.stringify({ ticket_description: desc }),
-                        }));
-                    }
-
-                    this.addMessage({
-                        id: `ticket-msg-${Date.now()}`,
-                        role: 'user',
-                        content: `Ticket Submitted: ${desc}`,
-                        timestamp: new Date()
-                    });
-
-                    ticketForm.innerHTML = `<div style="color: var(--ai-primary); font-size: 13px; font-weight: 500;">Ticket submitted successfully! A representative will follow up.</div>`;
-                    setTimeout(() => {
-                        el.remove();
-                    }, 3000);
-                } catch (e) {
-                    console.error(e);
-                    submitBtn.disabled = false;
-                    submitBtn.textContent = 'Submit';
-                }
             });
         }
     }
