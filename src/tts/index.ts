@@ -37,8 +37,24 @@ const MAX_CONCURRENT_FETCHES = 3;
 const TTS_FETCH_RETRIES = 2;
 const TTS_FETCH_RETRY_DELAY_MS = 400;
 
-function preprocessText(text: string): string {
+/** Strip markdown so TTS never speaks "*", "_", backticks, etc. */
+function stripMarkdownForSpeech(text: string): string {
     return text
+        .replace(/```[\s\S]*?```/g, ' ')
+        .replace(/`([^`]+)`/g, '$1')
+        .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+        .replace(/^#{1,6}\s+/gm, '')
+        .replace(/\*\*(.*?)\*\*/g, '$1')
+        .replace(/__(.*?)__/g, '$1')
+        .replace(/\*(.*?)\*/g, '$1')
+        .replace(/_(.*?)_/g, '$1')
+        .replace(/^\s*[-*+]\s+/gm, '')
+        .replace(/[*_~`]{1,3}/g, ' ')
+        .replace(/^>+\s?/gm, '');
+}
+
+function preprocessText(text: string): string {
+    return stripMarkdownForSpeech(text)
         .replace(/\s+/g, ' ')
         .trim()
         .replace(/\bdr\./gi, 'doctor')
@@ -358,6 +374,7 @@ export class TTSController {
         if (!this.enabled) return;
 
         const processed = preprocessText(sentence);
+        if (!processed) return;
         this.queue.push({ text: processed, fetch: null });
         void this.ensureInitialized().then(() => {
             this.fillFetchSlots();
