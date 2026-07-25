@@ -114,12 +114,15 @@ export class Widget {
         leadCaptureEnabled: boolean;
         leadCaptureFields: string[];
         showSourcesInWidget: boolean;
+        voiceEnabled: boolean;
         handoffConfig?: {
             email_recipient?: string | null;
             whatsapp_number?: string | null;
             message?: string | null;
         } | null;
     } | null = null;
+    /** Feature flag from widget settings — Voice AI (STT/TTS). */
+    private voiceEnabled = true;
     private isLeadSubmitted = false;
 
     constructor(config: WidgetConfig) {
@@ -799,6 +802,7 @@ export class Widget {
         const ttsTrigger = this.container.querySelector('.ai-widget-tts-trigger')!;
         this.ttsButton = ttsTrigger as HTMLButtonElement;
         ttsTrigger.addEventListener('click', async () => {
+            if (!this.voiceEnabled) return;
             const enabled = await this.tts.toggle();
             this.ttsButton?.classList.toggle('active', enabled);
             this.ttsButton?.setAttribute('aria-pressed', enabled ? 'true' : 'false');
@@ -977,8 +981,10 @@ export class Widget {
                     leadCaptureEnabled: data.lead_capture_enabled,
                     leadCaptureFields: data.lead_capture_fields,
                     showSourcesInWidget: data.show_sources_in_widget ?? true,
+                    voiceEnabled: data.voice_enabled !== false,
                     handoffConfig: data.handoff_config,
                 };
+                this.applyVoiceAvailability(this.settings.voiceEnabled);
                 
                 // Dynamically update primary color if provided by server settings
                 if (this.settings.primaryColor) {
@@ -1855,6 +1861,9 @@ export class Widget {
 
     /** Lazily construct server STT on first mic use (no browser model download). */
     private ensureStt(): WhisperSTT {
+        if (!this.voiceEnabled) {
+            throw new Error('Voice AI is not available on this plan');
+        }
         if (!this.stt) {
             this.stt = new WhisperSTT({
                 apiUrl: this.config.endpoint,
@@ -1876,7 +1885,53 @@ export class Widget {
 
     // STT (Speech-to-Text) methods
     private toggleMic(): void {
+        if (!this.voiceEnabled) return;
         this.ensureStt().toggle();
+    }
+
+    private applyVoiceAvailability(enabled: boolean): void {
+        this.voiceEnabled = enabled;
+        const upgradeHint =
+            'Upgrade to Pro — Voice Assistant is available on Pro, Growth, and Enterprise plans.';
+
+        if (this.micButton) {
+            if (enabled) {
+                this.micButton.style.display = '';
+                this.micButton.removeAttribute('disabled');
+                this.micButton.classList.remove('plan-locked');
+                this.micButton.setAttribute('title', 'Click to speak');
+                this.micButton.setAttribute('aria-label', 'Voice input');
+            } else {
+                this.stt?.dispose();
+                this.stt = null;
+                this.micButton.style.display = 'none';
+                this.micButton.setAttribute('disabled', 'true');
+                this.micButton.classList.add('plan-locked');
+                this.micButton.setAttribute('title', upgradeHint);
+                this.micButton.setAttribute('aria-label', upgradeHint);
+            }
+        }
+
+        if (this.ttsButton) {
+            if (enabled) {
+                this.ttsButton.style.display = '';
+                this.ttsButton.removeAttribute('disabled');
+                this.ttsButton.classList.remove('plan-locked');
+                this.ttsButton.setAttribute('title', 'Toggle Voice');
+                this.ttsButton.setAttribute('aria-label', 'Toggle Voice');
+            } else {
+                if (this.tts.isEnabled()) {
+                    void this.tts.toggle();
+                }
+                this.ttsButton.classList.remove('active');
+                this.ttsButton.setAttribute('aria-pressed', 'false');
+                this.ttsButton.style.display = 'none';
+                this.ttsButton.setAttribute('disabled', 'true');
+                this.ttsButton.classList.add('plan-locked');
+                this.ttsButton.setAttribute('title', upgradeHint);
+                this.ttsButton.setAttribute('aria-label', upgradeHint);
+            }
+        }
     }
 
     private handleSTTResult(transcript: string, isFinal: boolean): void {
