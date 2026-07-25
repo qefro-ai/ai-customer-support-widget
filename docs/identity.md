@@ -53,7 +53,7 @@ widget.identify({
 
 The SDK sends `X-End-User-Session`. Tools with `END_USER_IDENTITY` forward `X-Session-Id`.
 
-`credentials: 'include'` is used only when the widget `endpoint` is **same-origin** as the page (self-hosted API). Cross-origin SaaS cannot forward your first-party cookies to `api.qefro.com`.
+`credentials: 'include'` is used only when the widget `endpoint` is **same-origin** as the page. Cross-origin SaaS cannot forward your first-party cookies to `api.qefro.com`.
 
 ## Token Refresh
 
