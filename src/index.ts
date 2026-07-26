@@ -40,8 +40,10 @@ function findEmbedScript(): HTMLScriptElement | null {
     const candidates: Array<HTMLScriptElement | null> = [
         document.currentScript as HTMLScriptElement | null,
         document.getElementById('qefro-widget-script') as HTMLScriptElement | null,
+        document.getElementById('portal-live-widget-script') as HTMLScriptElement | null,
         document.querySelector('script[data-token][src*="widget"]') as HTMLScriptElement | null,
         document.querySelector('script[id="qefro-widget-script"]') as HTMLScriptElement | null,
+        document.querySelector('script[data-token]') as HTMLScriptElement | null,
     ];
     for (const el of candidates) {
         if (el?.dataset?.token) return el;
