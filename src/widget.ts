@@ -61,6 +61,8 @@ interface ChatResponse {
     id?: string;
     messageId?: string;
     message?: string;
+    /** Machine-readable denial code (e.g. `usage_policy.idle_timeout`) on error chunks */
+    code?: string;
     sources?: Source[];
     conversationId?: string;
 }
@@ -1341,6 +1343,7 @@ export class Widget {
                         break;
                     }
                     this.finishTyping();
+                    if (this.handlePolicyDenial(response.code, response.message)) break;
                     this.setInlineStatus('Something went wrong while generating the reply. Please try again.', 'error');
                     this.addMessage({
                         id: Date.now().toString(),
@@ -1438,6 +1441,13 @@ export class Widget {
             }));
 
             if (!response.ok) {
+                // Usage-policy denials ({error: {code, message}}) carry a user-facing explanation.
+                const body = await response.json().catch(() => null);
+                const denial = body?.error && typeof body.error === 'object' ? body.error : null;
+                if (denial) {
+                    this.finishTyping();
+                    if (this.handlePolicyDenial(denial.code, denial.message)) return;
+                }
                 throw new Error('Request failed');
             }
 
@@ -1512,6 +1522,43 @@ export class Widget {
             });
             this.renderRetryButtonForLastMessage();
         }
+    }
+
+    /**
+     * Usage-policy denials (idle timeout, session expiry, message limits…) carry a
+     * user-facing explanation from the server — show that instead of the generic
+     * "something went wrong" copy. Conversations the server closed are detached so
+     * the next message (or "Try again") starts a fresh one.
+     */
+    private handlePolicyDenial(code?: string, message?: string): boolean {
+        if (!code || !code.startsWith('usage_policy.') || !message) return false;
+
+        this.setInlineStatus(message, 'error');
+
+        const conversationOver = [
+            'usage_policy.idle_timeout',
+            'usage_policy.session_expired',
+            'usage_policy.conversation_limit',
+        ].includes(code);
+        if (conversationOver && this.conversationId) {
+            // Keep the closed thread in the inbox, then detach the active chat.
+            this.snapshotActiveToInbox();
+            this.conversationId = null;
+            this.inboxStore.activeId = null;
+            this.persistInboxStore();
+        }
+
+        this.addMessage({
+            id: Date.now().toString(),
+            role: 'assistant',
+            content: message,
+            timestamp: new Date(),
+        });
+        if (conversationOver) {
+            // Retry re-sends the last message into a brand-new conversation.
+            this.renderRetryButtonForLastMessage();
+        }
+        return true;
     }
 
     /** Adds a "Try again" action to a failure message so a flaky connection doesn't dead-end the conversation. */
