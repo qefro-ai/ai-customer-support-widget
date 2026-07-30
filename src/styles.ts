@@ -150,6 +150,7 @@ function buildStyles(config: WidgetConfig): string {
     .ai-widget-panel {
       display: none;
       flex-direction: column;
+      position: relative;
       width: min(380px, calc(100vw - 32px));
       height: min(550px, calc(100dvh - 104px));
       max-height: calc(100dvh - 104px);
@@ -923,7 +924,7 @@ function buildStyles(config: WidgetConfig): string {
 
     .ai-widget-lead-overlay {
       position: absolute;
-      top: 52px; /* right under header */
+      top: 64px; /* header: 16px padding x2 + 32px action buttons */
       left: 0;
       right: 0;
       bottom: 0;
@@ -932,8 +933,8 @@ function buildStyles(config: WidgetConfig): string {
       -webkit-backdrop-filter: blur(24px) saturate(210%) contrast(90%);
       display: flex;
       flex-direction: column;
-      justify-content: center;
-      padding: 24px;
+      overflow-y: auto;
+      padding: 16px 24px;
       z-index: 10;
       animation: ai-fade-in 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
       box-sizing: border-box;
@@ -963,16 +964,18 @@ function buildStyles(config: WidgetConfig): string {
     .ai-widget-lead-form {
       display: flex;
       flex-direction: column;
-      gap: 16px;
+      gap: 12px;
       width: 100%;
       box-sizing: border-box;
+      margin-bottom: auto;
+      flex-shrink: 0;
     }
 
     .ai-widget-lead-title {
       font-size: 20px;
       font-weight: 700;
       color: var(--ai-text);
-      margin: 0 0 4px 0;
+      margin: auto 0 4px 0; /* pairs with form margin-bottom:auto to centre only when it fits */
       text-align: center;
       letter-spacing: -0.02em;
     }
@@ -980,7 +983,7 @@ function buildStyles(config: WidgetConfig): string {
     .ai-widget-lead-subtitle {
       font-size: 13px;
       color: var(--ai-text-secondary);
-      margin: 0 0 16px 0;
+      margin: 0 0 12px 0;
       text-align: center;
       line-height: 1.45;
     }
@@ -1007,7 +1010,7 @@ function buildStyles(config: WidgetConfig): string {
     .ai-widget-lead-input {
       border: 1px solid var(--ai-border);
       border-radius: 10px;
-      padding: 10px 14px;
+      padding: 9px 14px;
       font-size: 14px;
       font-family: inherit;
       background: ${config.theme === 'dark' ? 'rgba(255, 255, 255, 0.03)' : 'rgba(0, 0, 0, 0.015)'};
@@ -1072,8 +1075,8 @@ function buildStyles(config: WidgetConfig): string {
     }
 
     .ai-widget-lead-skip {
-      margin-top: 10px;
-      padding: 10px;
+      margin-top: 2px;
+      padding: 8px;
       border: none;
       background: transparent;
       color: var(--ai-text-secondary);
