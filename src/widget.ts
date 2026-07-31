@@ -56,7 +56,7 @@ interface PersistedConversationV1 {
 }
 
 interface ChatResponse {
-    type: 'token' | 'conversationId' | 'done' | 'error' | 'status' | 'sources' | 'agentMessage' | 'actions';
+    type: 'token' | 'conversationId' | 'done' | 'error' | 'status' | 'sources' | 'agentMessage' | 'agentTyping' | 'actions';
     content?: string;
     id?: string;
     messageId?: string;
@@ -678,6 +678,8 @@ export class Widget {
 
         const viewingThis = this.viewMode === 'chat' && this.conversationId === conversationId;
         if (viewingThis) {
+            // Agent reply arrived — drop any "Agent is typing..." indicator.
+            if (!this.isTyping) this.hideTypingIndicator();
             this.addMessage(msg, { persist: false });
             this.tts.processText(content);
             this.tts.onResponseComplete();
@@ -1305,6 +1307,12 @@ export class Widget {
                             response.content,
                             response.messageId
                         );
+                    }
+                    break;
+
+                case 'agentTyping':
+                    if (response.conversationId) {
+                        this.showAgentTypingIndicator(response.conversationId);
                     }
                     break;
 
@@ -1978,8 +1986,47 @@ export class Widget {
             clearInterval(this.typingInterval);
             this.typingInterval = null;
         }
+        if (this.agentTypingTimer !== null) {
+            clearTimeout(this.agentTypingTimer);
+            this.agentTypingTimer = null;
+        }
         const indicator = this.messagesContainer.querySelector('.ai-widget-typing');
         indicator?.remove();
+    }
+
+    private agentTypingTimer: number | null = null;
+
+    /**
+     * "Agent is typing..." indicator driven by inbox typing pings. Auto-hides
+     * shortly after pings stop; replaced by the reply when it arrives.
+     */
+    private showAgentTypingIndicator(conversationId: string): void {
+        // AI streaming owns the indicator; only show for the actively viewed chat.
+        if (this.isTyping) return;
+        if (this.viewMode !== 'chat' || this.conversationId !== conversationId) return;
+
+        const existing = this.messagesContainer.querySelector('.ai-widget-typing');
+        if (!existing) {
+            const indicator = document.createElement('div');
+            indicator.className = 'ai-widget-typing';
+            indicator.setAttribute('role', 'status');
+            indicator.setAttribute('aria-live', 'polite');
+            indicator.innerHTML = `
+                <div class="ai-widget-status-text">Agent is typing...</div>
+                <div class="ai-widget-typing-dots"><span></span><span></span><span></span></div>
+            `;
+            this.messagesContainer.appendChild(indicator);
+            this.scrollToBottom();
+        } else {
+            const textEl = existing.querySelector('.ai-widget-status-text');
+            if (textEl) textEl.textContent = 'Agent is typing...';
+        }
+
+        if (this.agentTypingTimer !== null) clearTimeout(this.agentTypingTimer);
+        this.agentTypingTimer = window.setTimeout(() => {
+            this.agentTypingTimer = null;
+            if (!this.isTyping) this.hideTypingIndicator();
+        }, 12000);
     }
 
     private updateTypingIndicator(message: string): void {
