@@ -56,7 +56,7 @@ interface PersistedConversationV1 {
 }
 
 interface ChatResponse {
-    type: 'token' | 'conversationId' | 'done' | 'error' | 'status' | 'sources' | 'agentMessage';
+    type: 'token' | 'conversationId' | 'done' | 'error' | 'status' | 'sources' | 'agentMessage' | 'actions';
     content?: string;
     id?: string;
     messageId?: string;
@@ -65,6 +65,30 @@ interface ChatResponse {
     code?: string;
     sources?: Source[];
     conversationId?: string;
+    /** Compiled UI elements (chips, buttons, cards) on `actions` chunks */
+    elements?: UiActionElement[];
+}
+
+/** One tappable quick action compiled by the server (label shown, action sent). */
+interface UiActionItem {
+    label: string;
+    action: string;
+    description?: string;
+    icon?: string;
+}
+
+/** Server-compiled rich UI element rendered under an assistant message. */
+interface UiActionElement {
+    type: 'chips' | 'buttons' | 'menu' | 'card' | 'text' | 'image';
+    title?: string | null;
+    subtitle?: string | null;
+    text?: string;
+    url?: string;
+    caption?: string | null;
+    imageUrl?: string | null;
+    items?: UiActionItem[];
+    sections?: { title: string; items: UiActionItem[] }[];
+    actions?: UiActionItem[];
 }
 
 interface ServerMessage {
@@ -1319,6 +1343,12 @@ export class Widget {
                     }
                     break;
 
+                case 'actions':
+                    if (response.elements && response.elements.length > 0) {
+                        this.renderActionsForLastMessage(response.elements);
+                    }
+                    break;
+
                 case 'done':
                     this.finishTyping();
                     if (response.sources && response.sources.length > 0) {
@@ -1488,6 +1518,8 @@ export class Widget {
                             this.updateTypingIndicator(data.message || 'Processing...');
                         } else if (data.type === 'sources' && data.sources) {
                             this.renderSourcesForLastMessage(data.sources);
+                        } else if (data.type === 'actions' && data.elements) {
+                            this.renderActionsForLastMessage(data.elements);
                         } else if (data.type === 'done') {
                             this.finishTyping();
                             if (data.sources) this.renderSourcesForLastMessage(data.sources);
@@ -1683,6 +1715,111 @@ export class Widget {
                 });
             }
         }
+    }
+
+    /**
+     * Renders server-compiled quick actions (chips, button groups, menus, cards)
+     * under the last assistant message. Clicking an action sends its label as a
+     * regular user message — internal action ids are never shown.
+     */
+    private renderActionsForLastMessage(elements: UiActionElement[]): void {
+        const lastMessage = this.messages[this.messages.length - 1];
+        if (!lastMessage || lastMessage.role !== 'assistant') return;
+        const el = this.messagesContainer.querySelector(`[data-id="${lastMessage.id}"]`);
+        if (!el || el.querySelector('.ai-widget-actions')) return;
+
+        const wrap = document.createElement('div');
+        wrap.className = 'ai-widget-actions';
+
+        const addItems = (container: HTMLElement, items: UiActionItem[], cls: string) => {
+            for (const item of items) {
+                if (!item || !item.label) continue;
+                const btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = cls;
+                btn.textContent = item.label;
+                if (item.description) btn.title = item.description;
+                btn.addEventListener('click', () => {
+                    if (this.isTyping) return;
+                    // One-shot: actions disappear once a choice is made.
+                    wrap.remove();
+                    this.input.value = item.label;
+                    this.updateSendButtonState();
+                    void this.sendMessage();
+                });
+                container.appendChild(btn);
+            }
+        };
+
+        const addTitle = (container: HTMLElement, title?: string | null) => {
+            if (!title) return;
+            const t = document.createElement('div');
+            t.className = 'ai-widget-actions-title';
+            t.textContent = title;
+            container.appendChild(t);
+        };
+
+        for (const element of elements) {
+            switch (element.type) {
+                case 'chips':
+                case 'buttons': {
+                    if (!element.items || element.items.length === 0) break;
+                    addTitle(wrap, element.title);
+                    const group = document.createElement('div');
+                    group.className =
+                        element.type === 'buttons' ? 'ai-widget-action-buttons' : 'ai-widget-action-chips';
+                    addItems(
+                        group,
+                        element.items,
+                        element.type === 'buttons' ? 'ai-widget-action-btn' : 'ai-widget-action-chip'
+                    );
+                    wrap.appendChild(group);
+                    break;
+                }
+                case 'menu': {
+                    addTitle(wrap, element.title);
+                    for (const section of element.sections || []) {
+                        addTitle(wrap, section.title);
+                        const group = document.createElement('div');
+                        group.className = 'ai-widget-action-chips';
+                        addItems(group, section.items || [], 'ai-widget-action-chip');
+                        wrap.appendChild(group);
+                    }
+                    break;
+                }
+                case 'card': {
+                    const card = document.createElement('div');
+                    card.className = 'ai-widget-action-card';
+                    if (element.imageUrl) {
+                        const img = document.createElement('img');
+                        img.className = 'ai-widget-action-card-image';
+                        img.src = element.imageUrl;
+                        img.alt = element.title || '';
+                        card.appendChild(img);
+                    }
+                    addTitle(card, element.title);
+                    if (element.subtitle) {
+                        const sub = document.createElement('div');
+                        sub.className = 'ai-widget-action-card-subtitle';
+                        sub.textContent = element.subtitle;
+                        card.appendChild(sub);
+                    }
+                    if (element.actions && element.actions.length > 0) {
+                        const group = document.createElement('div');
+                        group.className = 'ai-widget-action-buttons';
+                        addItems(group, element.actions, 'ai-widget-action-btn');
+                        card.appendChild(group);
+                    }
+                    wrap.appendChild(card);
+                    break;
+                }
+                // 'text'/'image' elements ride inside the message content; skip here.
+            }
+        }
+
+        if (wrap.childElementCount === 0) return;
+        el.appendChild(wrap);
+        this.scrollToBottom();
     }
 
     private renderSourcesForLastMessage(sources: Source[]): void {

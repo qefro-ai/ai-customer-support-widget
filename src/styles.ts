@@ -1234,6 +1234,94 @@ function buildStyles(config: WidgetConfig): string {
       transform: none;
     }
 
+    .ai-widget-actions {
+      width: 100%;
+      margin-top: 8px;
+    }
+
+    .ai-widget-actions-title {
+      font-weight: 600;
+      font-size: 12.5px;
+      color: var(--ai-text-secondary);
+      margin: 6px 0 4px;
+    }
+
+    .ai-widget-action-chips {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .ai-widget-action-chip {
+      display: inline-flex;
+      align-items: center;
+      padding: 6px 12px;
+      border-radius: 999px;
+      border: 1px solid var(--ai-primary);
+      background: transparent;
+      color: var(--ai-primary);
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .ai-widget-action-chip:hover {
+      background: var(--ai-primary);
+      color: #fff;
+      transform: translateY(-1px);
+    }
+
+    .ai-widget-action-buttons {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      margin-top: 6px;
+    }
+
+    .ai-widget-action-btn {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 9px 14px;
+      border-radius: 8px;
+      border: 1px solid var(--ai-border);
+      background: var(--ai-bg-secondary);
+      color: var(--ai-text);
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.2s ease;
+    }
+
+    .ai-widget-action-btn:hover {
+      border-color: var(--ai-primary);
+      color: var(--ai-primary);
+      transform: translateY(-1px);
+    }
+
+    .ai-widget-action-card {
+      margin-top: 8px;
+      padding: 12px;
+      border: 1px solid var(--ai-border);
+      border-radius: 12px;
+      background: var(--ai-bg-secondary);
+    }
+
+    .ai-widget-action-card-image {
+      width: 100%;
+      border-radius: 8px;
+      margin-bottom: 8px;
+      display: block;
+    }
+
+    .ai-widget-action-card-subtitle {
+      font-size: 12.5px;
+      color: var(--ai-text-secondary);
+      margin-bottom: 6px;
+    }
+
     .ai-widget-handoff-container {
       width: 100%;
     }
