@@ -150,6 +150,8 @@ export class Widget {
     /** Feature flag from widget settings — Voice AI (STT/TTS). */
     private voiceEnabled = true;
     private isLeadSubmitted = false;
+    /** Lead ID awaiting conversation linkage (set after lead form submit, cleared once linked) */
+    private pendingLeadId: string | null = null;
 
     constructor(config: WidgetConfig) {
         this.config = config;
@@ -293,6 +295,26 @@ export class Widget {
         this.inboxStore.activeId = this.conversationId;
         this.persistInboxStore();
         this.updateInboxBadge();
+    }
+
+    /** Links the pending lead to the newly created conversation (fire-and-forget). */
+    private linkLeadToConversation(): void {
+        if (!this.pendingLeadId || !this.conversationId) return;
+        const leadId = this.pendingLeadId;
+        this.pendingLeadId = null;
+
+        fetch(`${this.config.endpoint}/api/v1/widget/leads/link-conversation`, this.fetchInit({
+            method: 'PUT',
+            headers: {
+                'Content-Type': 'application/json',
+                'x-widget-token': this.config.token,
+                ...this.sessionHeaders(),
+            },
+            body: JSON.stringify({
+                lead_id: leadId,
+                conversation_id: this.conversationId,
+            }),
+        })).catch(() => { /* best-effort linkage */ });
     }
 
     private loadInboxStore(): InboxStore {
@@ -1181,7 +1203,13 @@ export class Widget {
                 if (response.ok) {
                     this.isLeadSubmitted = true;
                     localStorage.setItem(`ai-widget-lead-submitted-${this.config.token}`, 'true');
-                    
+
+                    // Store lead ID so we can link it to the conversation once one is created
+                    const leadData = await response.json().catch(() => null);
+                    if (leadData?.id) {
+                        this.pendingLeadId = leadData.id;
+                    }
+
                     overlay.classList.add('fade-out');
                     setTimeout(() => {
                         overlay.remove();
@@ -1297,6 +1325,7 @@ export class Widget {
                 case 'conversationId':
                     this.conversationId = response.id!;
                     this.persistConversation();
+                    this.linkLeadToConversation();
                     this.resumeConversationOnSocket();
                     break;
 
@@ -1522,6 +1551,7 @@ export class Widget {
                         } else if (data.type === 'conversationId') {
                             this.conversationId = data.id || null;
                             this.persistConversation();
+                            this.linkLeadToConversation();
                         } else if (data.type === 'status') {
                             this.updateTypingIndicator(data.message || 'Processing...');
                         } else if (data.type === 'sources' && data.sources) {
