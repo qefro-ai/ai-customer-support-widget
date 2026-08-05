@@ -152,6 +152,8 @@ export class Widget {
     private isLeadSubmitted = false;
     /** Lead ID awaiting conversation linkage (set after lead form submit, cleared once linked) */
     private pendingLeadId: string | null = null;
+    /** Buffered action elements that arrived before the assistant message was created (WebSocket path) */
+    private pendingActions: UiActionElement[] | null = null;
 
     constructor(config: WidgetConfig) {
         this.config = config;
@@ -1360,6 +1362,11 @@ export class Widget {
                             content: response.content!,
                             timestamp: new Date(),
                         });
+                        // Render any buffered actions that arrived before the message
+                        if (this.pendingActions) {
+                            this.renderActionsForLastMessage(this.pendingActions);
+                            this.pendingActions = null;
+                        }
                         this.playNotificationSound();
                         if (!this.isOpen) {
                             this.unreadCount++;
@@ -1382,7 +1389,13 @@ export class Widget {
 
                 case 'actions':
                     if (response.elements && response.elements.length > 0) {
-                        this.renderActionsForLastMessage(response.elements);
+                        // Buffer actions if no assistant message exists yet (WebSocket path)
+                        const lastMsg = this.messages[this.messages.length - 1];
+                        if (!lastMsg || lastMsg.role !== 'assistant') {
+                            this.pendingActions = response.elements;
+                        } else {
+                            this.renderActionsForLastMessage(response.elements);
+                        }
                     }
                     break;
 
