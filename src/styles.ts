@@ -591,10 +591,19 @@ function buildStyles(config: WidgetConfig): string {
       color: var(--ai-primary);
       text-decoration: underline;
       text-underline-offset: 2px;
+      text-decoration-thickness: 1.5px;
+      word-break: break-word;
+      overflow-wrap: anywhere;
+      /* Comfortable tap target without blowing up line height */
+      padding: 2px 0;
+      margin: -2px 0;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
 
     .ai-widget-message.user .ai-widget-message-content a {
       color: white;
+      text-decoration-color: rgba(255, 255, 255, 0.85);
     }
 
     .ai-widget-tool-card {
@@ -1256,21 +1265,30 @@ function buildStyles(config: WidgetConfig): string {
     .ai-widget-action-chip {
       display: inline-flex;
       align-items: center;
-      padding: 6px 12px;
+      justify-content: center;
+      min-height: 36px;
+      padding: 8px 14px;
       border-radius: 999px;
       border: 1px solid var(--ai-primary);
-      background: transparent;
+      background: rgba(124, 58, 237, 0.08);
+      background: color-mix(in srgb, var(--ai-primary) 8%, transparent);
       color: var(--ai-primary);
-      font-size: 12.5px;
+      font-size: 13px;
       font-weight: 600;
+      line-height: 1.2;
       cursor: pointer;
-      transition: all 0.2s ease;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      transition: background 0.15s ease, color 0.15s ease, border-color 0.15s ease;
     }
 
     .ai-widget-action-chip:hover {
       background: var(--ai-primary);
       color: #fff;
-      transform: translateY(-1px);
+    }
+
+    .ai-widget-action-chip:active {
+      transform: scale(0.98);
     }
 
     .ai-widget-action-buttons {
@@ -1284,7 +1302,8 @@ function buildStyles(config: WidgetConfig): string {
       display: flex;
       align-items: center;
       justify-content: center;
-      padding: 9px 14px;
+      min-height: 40px;
+      padding: 10px 14px;
       border-radius: 8px;
       border: 1px solid var(--ai-border);
       background: var(--ai-bg-secondary);
@@ -1292,13 +1311,18 @@ function buildStyles(config: WidgetConfig): string {
       font-size: 13px;
       font-weight: 600;
       cursor: pointer;
-      transition: all 0.2s ease;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
+      transition: border-color 0.15s ease, color 0.15s ease;
     }
 
     .ai-widget-action-btn:hover {
       border-color: var(--ai-primary);
       color: var(--ai-primary);
-      transform: translateY(-1px);
+    }
+
+    .ai-widget-action-btn:active {
+      transform: scale(0.99);
     }
 
     .ai-widget-action-card {

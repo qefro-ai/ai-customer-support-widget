@@ -19,6 +19,8 @@ interface Message {
     role: 'user' | 'assistant';
     content: string;
     timestamp: Date;
+    /** Server-compiled chips/buttons restored from message metadata */
+    actions?: UiActionElement[];
 }
 
 interface Source {
@@ -97,6 +99,11 @@ interface ServerMessage {
     content: string;
     created_at?: string;
     createdAt?: string;
+    metadata?: {
+        ui_actions?: UiActionElement[];
+        uiActions?: UiActionElement[];
+        [key: string]: unknown;
+    };
 }
 
 
@@ -154,6 +161,8 @@ export class Widget {
     private pendingLeadId: string | null = null;
     /** Buffered action elements that arrived before the assistant message was created (WebSocket path) */
     private pendingActions: UiActionElement[] | null = null;
+    /** Machine id from the last chip tap (`time:…` / `table:…`) — sent with the label */
+    private pendingChipActionId: string | null = null;
 
     constructor(config: WidgetConfig) {
         this.config = config;
@@ -475,9 +484,32 @@ export class Widget {
                     role: m.role as 'user' | 'assistant',
                     content: m.content,
                     timestamp: new Date(m.created_at || m.createdAt || Date.now()),
+                    actions: m.metadata?.ui_actions || m.metadata?.uiActions || undefined,
                 }));
 
             if (restored.length === 0) return;
+
+            // Don't clobber an in-flight reply (empty streaming placeholder or chips
+            // already rendered for a turn the server snapshot may not include yet).
+            if (this.isTyping) {
+                const persisted: PersistedMessage[] = restored.map((m) => ({
+                    id: m.id,
+                    role: m.role,
+                    content: m.content,
+                    timestamp: m.timestamp.toISOString(),
+                }));
+                const existing = this.inboxStore.threads[conversationId];
+                this.inboxStore.threads[conversationId] = {
+                    conversationId,
+                    title: this.threadTitle(persisted),
+                    preview: this.threadPreview(persisted),
+                    messages: persisted,
+                    updatedAt: Date.now(),
+                    unread: existing?.unread ?? 0,
+                };
+                this.persistInboxStore();
+                return;
+            }
 
             const persisted: PersistedMessage[] = restored.map((m) => ({
                 id: m.id,
@@ -1400,6 +1432,11 @@ export class Widget {
                     break;
 
                 case 'done':
+                    // Flush chips that arrived before the assistant bubble existed.
+                    if (this.pendingActions) {
+                        this.renderActionsForLastMessage(this.pendingActions);
+                        this.pendingActions = null;
+                    }
                     this.finishTyping();
                     if (response.sources && response.sources.length > 0) {
                         this.renderSourcesForLastMessage(response.sources);
@@ -1447,6 +1484,9 @@ export class Widget {
         const content = this.input.value.trim();
         if (!content || this.isTyping) return;
 
+        const chipActionId = this.pendingChipActionId;
+        this.pendingChipActionId = null;
+
         this.setInlineStatus(null);
         this.lastSentContent = content;
 
@@ -1472,7 +1512,7 @@ export class Widget {
         try {
             await this.connectWebSocket();
         } catch {
-            await this.sendViaHttp(content);
+            await this.sendViaHttp(content, chipActionId);
             return;
         }
 
@@ -1485,6 +1525,7 @@ export class Widget {
                 workspaceId: this.config.workspaceId || undefined,
                 // include optional context to help retrieval / routing on the server
                 context: (this.config as any).context || undefined,
+                ...(chipActionId ? { chipActionId } : {}),
                 ...this.chatIdentityPayload(),
             }));
 
@@ -1498,11 +1539,11 @@ export class Widget {
             });
         } else {
             // Fallback to HTTP
-            this.sendViaHttp(content);
+            this.sendViaHttp(content, chipActionId);
         }
     }
 
-    private async sendViaHttp(content: string): Promise<void> {
+    private async sendViaHttp(content: string, chipActionId?: string | null): Promise<void> {
         try {
             const response = await fetch(`${this.config.endpoint}/api/v1/widget/chat`, this.fetchInit({
                 method: 'POST',
@@ -1516,6 +1557,7 @@ export class Widget {
                     conversationId: this.conversationId,
                     workspaceId: this.config.workspaceId || undefined,
                     context: (this.config as any).context || undefined,
+                    ...(chipActionId ? { chipActionId } : {}),
                     ...this.chatIdentityPayload(),
                 }),
             }));
@@ -1572,6 +1614,10 @@ export class Widget {
                         } else if (data.type === 'actions' && data.elements) {
                             this.renderActionsForLastMessage(data.elements);
                         } else if (data.type === 'done') {
+                            if (this.pendingActions) {
+                                this.renderActionsForLastMessage(this.pendingActions);
+                                this.pendingActions = null;
+                            }
                             this.finishTyping();
                             if (data.sources) this.renderSourcesForLastMessage(data.sources);
                             if (data.messageId) {
@@ -1735,6 +1781,10 @@ export class Widget {
             this.announce(this.toPlainText(message.content));
         }
 
+        if (message.role === 'assistant' && message.actions && message.actions.length > 0) {
+            this.renderActionsForLastMessage(message.actions);
+        }
+
         if (options.persist !== false) {
             this.persistConversation();
         }
@@ -1794,6 +1844,9 @@ export class Widget {
                     if (this.isTyping) return;
                     // One-shot: actions disappear once a choice is made.
                     wrap.remove();
+                    // Human-readable label is what the guest sees; machine id
+                    // (time:/table:) is sent alongside for booking-draft harvest.
+                    this.pendingChipActionId = item.action || null;
                     this.input.value = item.label;
                     this.updateSendButtonState();
                     void this.sendMessage();
@@ -1907,8 +1960,11 @@ export class Widget {
     }
 
     private formatContent(content: string): string {
+        // Escape first so LLM/raw HTML cannot inject tags; markdown below reintroduces safe markup only.
+        let formatted = this.escapeHtml(content);
+
         // 1. Handle code blocks (```code```)
-        let formatted = content.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
+        formatted = formatted.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
 
         // 2. GFM pipe tables → card-style HTML tables (Business Tool results)
         formatted = this.formatMarkdownTables(formatted);
@@ -1917,14 +1973,20 @@ export class Widget {
         formatted = formatted.replace(/^(?:\*|-)\s+(.+)$/gm, '<li>$1</li>');
         formatted = formatted.replace(/(?:<li>.*<\/li>\n?)+/g, (match) => `<ul>${match}</ul>`);
 
-        // 4. Handle bold, italic, inline code, links
+        // 4. Handle bold, italic, inline code, markdown links
         formatted = formatted
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
             .replace(/`([^`]+)`/g, '<code>$1</code>')
-            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+            .replace(
+                /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
+                '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+            );
 
-        // 5. Newlines → <br> outside pre/table
+        // 5. Autolink bare http(s) URLs (booking links, etc.) — skip existing <a>/code/pre
+        formatted = this.linkifyBareUrls(formatted);
+
+        // 6. Newlines → <br> outside pre/table
         const parts = formatted.split(/(<pre>[\s\S]*?<\/pre>|<div class="ai-widget-tool-card">[\s\S]*?<\/div>)/);
         const result = parts.map(part => {
             if (part.startsWith('<pre>') || part.startsWith('<div class="ai-widget-tool-card">')) return part;
@@ -1934,6 +1996,43 @@ export class Widget {
             ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'br', 'a', 'ul', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'h3'],
             ALLOWED_ATTR: ['href', 'target', 'rel', 'class'],
         });
+    }
+
+    /** Turn bare https://… URLs into anchors; leave markdown links / code alone. */
+    private linkifyBareUrls(html: string): string {
+        const placeholders: string[] = [];
+        const protect = (input: string, pattern: RegExp): string =>
+            input.replace(pattern, (match) => {
+                const token = `\u0000PH${placeholders.length}\u0000`;
+                placeholders.push(match);
+                return token;
+            });
+
+        let protectedHtml = protect(html, /<a\b[^>]*>[\s\S]*?<\/a>/gi);
+        protectedHtml = protect(protectedHtml, /<pre>[\s\S]*?<\/pre>/gi);
+        protectedHtml = protect(protectedHtml, /<code>[\s\S]*?<\/code>/gi);
+
+        protectedHtml = protectedHtml.replace(/\bhttps?:\/\/[^\s<]+/gi, (raw) => {
+            let href = raw;
+            let trailing = '';
+            // Peel common sentence punctuation that is rarely part of the URL.
+            while (/[.,;:!?]$/.test(href)) {
+                trailing = href.slice(-1) + trailing;
+                href = href.slice(0, -1);
+            }
+            const openParens = (href.match(/\(/g) || []).length;
+            const closeParens = (href.match(/\)/g) || []).length;
+            if (href.endsWith(')') && closeParens > openParens) {
+                trailing = ')' + trailing;
+                href = href.slice(0, -1);
+            }
+            if (!/^https?:\/\//i.test(href)) {
+                return raw;
+            }
+            return `<a href="${href}" target="_blank" rel="noopener noreferrer">${href}</a>${trailing}`;
+        });
+
+        return protectedHtml.replace(/\u0000PH(\d+)\u0000/g, (_, index: string) => placeholders[Number(index)] ?? '');
     }
 
     /** Convert GFM pipe tables into styled card tables for Business Tool results. */
