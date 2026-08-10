@@ -1820,8 +1820,9 @@ export class Widget {
 
     /**
      * Renders server-compiled quick actions (chips, button groups, menus, cards)
-     * under the last assistant message. Clicking an action sends its label as a
-     * regular user message — internal action ids are never shown.
+     * under the last assistant message. Clicking an action fills the composer
+     * with its label (guest can edit before send) — internal action ids are
+     * never shown.
      */
     private renderActionsForLastMessage(elements: UiActionElement[]): void {
         const lastMessage = this.messages[this.messages.length - 1];
@@ -1842,14 +1843,15 @@ export class Widget {
                 if (item.description) btn.title = item.description;
                 btn.addEventListener('click', () => {
                     if (this.isTyping) return;
-                    // One-shot: actions disappear once a choice is made.
-                    wrap.remove();
-                    // Human-readable label is what the guest sees; machine id
-                    // (time:/table:) is sent alongside for booking-draft harvest.
+                    // Fill the composer so the guest can edit before sending.
+                    // Machine id (time:/table:) is kept until send for booking-draft harvest.
                     this.pendingChipActionId = item.action || null;
                     this.input.value = item.label;
+                    this.input.style.height = 'auto';
+                    this.input.style.height =
+                        Math.min(this.input.scrollHeight, 120) + 'px';
                     this.updateSendButtonState();
-                    void this.sendMessage();
+                    this.input.focus();
                 });
                 container.appendChild(btn);
             }
