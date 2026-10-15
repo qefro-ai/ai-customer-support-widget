@@ -12,6 +12,7 @@ import {
 import { WhisperSTT, WhisperSTTState as STTState } from './tts/whisper-stt';
 import { TTSController } from './tts/index';
 import DOMPurify from 'dompurify';
+import { escapeHtml as escapeHtmlText, formFieldError, formatAssistantContent, safeMediaUrl } from './format-content';
 import { injectStyles, sanitizeCssColor } from './styles';
 
 interface Message {
@@ -81,7 +82,7 @@ interface UiActionItem {
 
 /** Server-compiled rich UI element rendered under an assistant message. */
 interface UiActionElement {
-    type: 'chips' | 'buttons' | 'menu' | 'card' | 'text' | 'image';
+    type: 'chips' | 'buttons' | 'menu' | 'card' | 'text' | 'image' | 'table' | 'chart' | 'summary' | 'notice' | 'form';
     title?: string | null;
     subtitle?: string | null;
     text?: string;
@@ -91,6 +92,18 @@ interface UiActionElement {
     items?: UiActionItem[];
     sections?: { title: string; items: UiActionItem[] }[];
     actions?: UiActionItem[];
+    kind?: string;
+    level?: string;
+    summary?: string;
+    captionText?: string | null;
+    headers?: string[];
+    rows?: string[][];
+    points?: { label: string; value: string }[];
+    lines?: { label: string; value: string }[];
+    recovery?: UiActionItem[];
+    id?: string;
+    fields?: { id: string; label: string; required?: boolean; input?: string | null }[];
+    submit?: UiActionItem;
 }
 
 interface ServerMessage {
@@ -618,11 +631,7 @@ export class Widget {
     }
 
     private escapeHtml(text: string): string {
-        return text
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;');
+        return escapeHtmlText(text);
     }
 
     private async openInboxThread(conversationId: string): Promise<void> {
@@ -1566,9 +1575,18 @@ export class Widget {
                 // Usage-policy denials ({error: {code, message}}) carry a user-facing explanation.
                 const body = await response.json().catch(() => null);
                 const denial = body?.error && typeof body.error === 'object' ? body.error : null;
-                if (denial) {
+                const denialMessage = typeof denial?.message === 'string' ? denial.message.trim() : '';
+                if (denialMessage) {
                     this.finishTyping();
-                    if (this.handlePolicyDenial(denial.code, denial.message)) return;
+                    if (this.handlePolicyDenial(denial.code, denialMessage)) return;
+                    this.setInlineStatus(denialMessage, 'error');
+                    this.addMessage({
+                        id: `denied-${Date.now()}`,
+                        role: 'assistant',
+                        content: denialMessage,
+                        timestamp: new Date(),
+                    });
+                    return;
                 }
                 throw new Error('Request failed');
             }
@@ -1896,10 +1914,12 @@ export class Widget {
                 case 'card': {
                     const card = document.createElement('div');
                     card.className = 'ai-widget-action-card';
-                    if (element.imageUrl) {
+                    card.dir = 'auto';
+                    const imageUrl = safeMediaUrl(element.imageUrl);
+                    if (imageUrl) {
                         const img = document.createElement('img');
                         img.className = 'ai-widget-action-card-image';
-                        img.src = element.imageUrl;
+                        img.src = imageUrl;
                         img.alt = element.title || '';
                         card.appendChild(img);
                     }
@@ -1917,6 +1937,177 @@ export class Widget {
                         card.appendChild(group);
                     }
                     wrap.appendChild(card);
+                    break;
+                }
+                case 'summary': {
+                    const card = document.createElement('div');
+                    card.className = 'ai-widget-action-card ai-widget-summary';
+                    card.dir = 'auto';
+                    if (element.kind) {
+                        const kind = document.createElement('div');
+                        kind.className = 'ai-widget-summary-kind';
+                        kind.textContent = element.kind.replace(/_/g, ' ');
+                        card.appendChild(kind);
+                    }
+                    addTitle(card, element.title);
+                    for (const line of element.lines || []) {
+                        const row = document.createElement('div');
+                        row.className = 'ai-widget-summary-line';
+                        const label = document.createElement('span');
+                        label.textContent = line.label;
+                        const value = document.createElement('span');
+                        value.textContent = line.value;
+                        row.append(label, value);
+                        card.appendChild(row);
+                    }
+                    if (element.actions && element.actions.length > 0) {
+                        const group = document.createElement('div');
+                        group.className = 'ai-widget-action-buttons';
+                        addItems(group, element.actions, 'ai-widget-action-btn');
+                        card.appendChild(group);
+                    }
+                    wrap.appendChild(card);
+                    break;
+                }
+                case 'table': {
+                    const card = document.createElement('div');
+                    card.className = 'ai-widget-tool-card';
+                    card.dir = 'auto';
+                    if (element.caption) addTitle(card, element.caption);
+                    const table = document.createElement('table');
+                    const headers = element.headers || [];
+                    if (headers.length > 0) {
+                        const thead = document.createElement('thead');
+                        const tr = document.createElement('tr');
+                        for (const header of headers) {
+                            const th = document.createElement('th');
+                            th.textContent = header;
+                            th.scope = 'col';
+                            tr.appendChild(th);
+                        }
+                        thead.appendChild(tr);
+                        table.appendChild(thead);
+                    }
+                    const tbody = document.createElement('tbody');
+                    for (const row of element.rows || []) {
+                        const tr = document.createElement('tr');
+                        row.forEach((cell, index) => {
+                            const td = document.createElement('td');
+                            td.textContent = cell;
+                            if (index === 0) td.setAttribute('scope', 'row');
+                            tr.appendChild(td);
+                        });
+                        tbody.appendChild(tr);
+                    }
+                    table.appendChild(tbody);
+                    card.appendChild(table);
+                    wrap.appendChild(card);
+                    break;
+                }
+                case 'chart': {
+                    const card = document.createElement('div');
+                    card.className = 'ai-widget-action-card';
+                    card.dir = 'auto';
+                    addTitle(card, element.title);
+                    if (element.summary) {
+                        const summary = document.createElement('p');
+                        summary.className = 'ai-widget-action-card-subtitle';
+                        summary.textContent = element.summary;
+                        card.appendChild(summary);
+                    }
+                    const list = document.createElement('ul');
+                    list.className = 'ai-widget-chart-summary';
+                    for (const point of element.points || []) {
+                        const item = document.createElement('li');
+                        item.textContent = `${point.label}: ${point.value}`;
+                        list.appendChild(item);
+                    }
+                    card.appendChild(list);
+                    wrap.appendChild(card);
+                    break;
+                }
+                case 'notice': {
+                    const card = document.createElement('div');
+                    card.className = `ai-widget-notice ai-widget-notice-${element.level || 'status'}`;
+                    card.dir = 'auto';
+                    card.setAttribute('role', element.level === 'error' ? 'alert' : 'status');
+                    const text = document.createElement('p');
+                    text.textContent = element.text || '';
+                    card.appendChild(text);
+                    if (element.recovery && element.recovery.length > 0) {
+                        const group = document.createElement('div');
+                        group.className = 'ai-widget-action-buttons';
+                        addItems(group, element.recovery, 'ai-widget-action-btn');
+                        card.appendChild(group);
+                    }
+                    wrap.appendChild(card);
+                    break;
+                }
+                case 'form': {
+                    const form = document.createElement('form');
+                    form.className = 'ai-widget-action-card ai-widget-form';
+                    form.dir = 'auto';
+                    form.noValidate = true;
+                    addTitle(form, element.title);
+                    const fields = element.fields || [];
+                    const inputs: HTMLInputElement[] = [];
+                    for (const field of fields) {
+                        const label = document.createElement('label');
+                        label.className = 'ai-widget-form-field';
+                        label.textContent = field.label;
+                        const input = document.createElement('input');
+                        input.name = field.id;
+                        input.required = !!field.required;
+                        const kind = (field.input || 'text').toLowerCase();
+                        input.type = kind === 'email' || kind === 'tel' || kind === 'number' ? kind : 'text';
+                        input.autocomplete = 'off';
+                        label.appendChild(input);
+                        const error = document.createElement('span');
+                        error.className = 'ai-widget-form-error';
+                        error.setAttribute('aria-live', 'polite');
+                        label.appendChild(error);
+                        form.appendChild(label);
+                        inputs.push(input);
+                    }
+                    const submit = document.createElement('button');
+                    submit.type = 'submit';
+                    submit.className = 'ai-widget-action-btn';
+                    submit.textContent = element.submit?.label || 'Submit';
+                    form.appendChild(submit);
+                    const sync = () => {
+                        let blocked = this.isTyping;
+                        inputs.forEach((input, index) => {
+                            const field = fields[index];
+                            const message = formFieldError({
+                                input: field?.input,
+                                required: field?.required,
+                                value: input.value,
+                            });
+                            const error = input.parentElement?.querySelector('.ai-widget-form-error');
+                            if (error) error.textContent = message && input.value ? message : '';
+                            if (message) blocked = true;
+                        });
+                        submit.disabled = blocked;
+                    };
+                    inputs.forEach((input) => input.addEventListener('input', sync));
+                    sync();
+                    form.addEventListener('submit', (event) => {
+                        event.preventDefault();
+                        if (this.isTyping || submit.disabled || submit.dataset.sent === '1') return;
+                        sync();
+                        if (submit.disabled) return;
+                        submit.dataset.sent = '1';
+                        submit.disabled = true;
+                        const lines = inputs.map((input, index) => {
+                            const field = fields[index];
+                            return `${field?.label || input.name}: ${input.value.trim()}`;
+                        });
+                        this.pendingChipActionId = element.submit?.action || element.id || null;
+                        this.input.value = lines.join('\n');
+                        this.updateSendButtonState();
+                        void this.sendMessage();
+                    });
+                    wrap.appendChild(form);
                     break;
                 }
                 // 'text'/'image' elements ride inside the message content; skip here.
@@ -1962,144 +2153,10 @@ export class Widget {
     }
 
     private formatContent(content: string): string {
-        // Escape first so LLM/raw HTML cannot inject tags; markdown below reintroduces safe markup only.
-        let formatted = this.escapeHtml(content);
-
-        // 1. Handle code blocks (```code```)
-        formatted = formatted.replace(/```([\s\S]*?)```/g, '<pre><code>$1</code></pre>');
-
-        // 2. GFM pipe tables → card-style HTML tables (Business Tool results)
-        formatted = this.formatMarkdownTables(formatted);
-
-        // 3. Handle unordered lists (- item or * item)
-        formatted = formatted.replace(/^(?:\*|-)\s+(.+)$/gm, '<li>$1</li>');
-        formatted = formatted.replace(/(?:<li>.*<\/li>\n?)+/g, (match) => `<ul>${match}</ul>`);
-
-        // 4. Handle bold, italic, inline code, markdown links
-        formatted = formatted
-            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-            .replace(/\*(.*?)\*/g, '<em>$1</em>')
-            .replace(/`([^`]+)`/g, '<code>$1</code>')
-            .replace(
-                /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/g,
-                '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
-            );
-
-        // 5. Autolink bare http(s) URLs (booking links, etc.) — skip existing <a>/code/pre
-        formatted = this.linkifyBareUrls(formatted);
-
-        // 6. Newlines → <br> outside pre/table
-        const parts = formatted.split(/(<pre>[\s\S]*?<\/pre>|<div class="ai-widget-tool-card">[\s\S]*?<\/div>)/);
-        const result = parts.map(part => {
-            if (part.startsWith('<pre>') || part.startsWith('<div class="ai-widget-tool-card">')) return part;
-            return part.replace(/\n/g, '<br>');
-        }).join('').trim();
-        return DOMPurify.sanitize(result, {
+        return DOMPurify.sanitize(formatAssistantContent(content), {
             ALLOWED_TAGS: ['strong', 'em', 'code', 'pre', 'br', 'a', 'ul', 'li', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'div', 'h3'],
             ALLOWED_ATTR: ['href', 'target', 'rel', 'class'],
         });
-    }
-
-    /** Turn bare https://… URLs into anchors; leave markdown links / code alone. */
-    private linkifyBareUrls(html: string): string {
-        const placeholders: string[] = [];
-        const protect = (input: string, pattern: RegExp): string =>
-            input.replace(pattern, (match) => {
-                const token = `\u0000PH${placeholders.length}\u0000`;
-                placeholders.push(match);
-                return token;
-            });
-
-        let protectedHtml = protect(html, /<a\b[^>]*>[\s\S]*?<\/a>/gi);
-        protectedHtml = protect(protectedHtml, /<pre>[\s\S]*?<\/pre>/gi);
-        protectedHtml = protect(protectedHtml, /<code>[\s\S]*?<\/code>/gi);
-
-        protectedHtml = protectedHtml.replace(/\bhttps?:\/\/[^\s<]+/gi, (raw) => {
-            let href = raw;
-            let trailing = '';
-            // Peel common sentence punctuation that is rarely part of the URL.
-            while (/[.,;:!?]$/.test(href)) {
-                trailing = href.slice(-1) + trailing;
-                href = href.slice(0, -1);
-            }
-            const openParens = (href.match(/\(/g) || []).length;
-            const closeParens = (href.match(/\)/g) || []).length;
-            if (href.endsWith(')') && closeParens > openParens) {
-                trailing = ')' + trailing;
-                href = href.slice(0, -1);
-            }
-            if (!/^https?:\/\//i.test(href)) {
-                return raw;
-            }
-            return `<a href="${href}" target="_blank" rel="noopener noreferrer">${href}</a>${trailing}`;
-        });
-
-        return protectedHtml.replace(/\u0000PH(\d+)\u0000/g, (_, index: string) => placeholders[Number(index)] ?? '');
-    }
-
-    /** Convert GFM pipe tables into styled card tables for Business Tool results. */
-    private formatMarkdownTables(content: string): string {
-        const lines = content.split(/\r?\n/);
-        const out: string[] = [];
-        let i = 0;
-
-        const splitRow = (line: string): string[] => {
-            const trimmed = line.trim().replace(/^\|/, '').replace(/\|$/, '');
-            return trimmed.split('|').map((c) => c.trim());
-        };
-        const isSep = (line: string): boolean => {
-            const cells = splitRow(line);
-            return cells.length > 0 && cells.every((c) => /^:?-{3,}:?$/.test(c));
-        };
-
-        while (i < lines.length) {
-            const headerLine = lines[i];
-            const sepLine = lines[i + 1];
-            if (
-                headerLine &&
-                sepLine &&
-                headerLine.includes('|') &&
-                isSep(sepLine) &&
-                splitRow(headerLine).length >= 2
-            ) {
-                const headers = splitRow(headerLine);
-                const rows: string[][] = [];
-                let j = i + 2;
-                while (j < lines.length && lines[j].includes('|') && !isSep(lines[j])) {
-                    const cells = splitRow(lines[j]);
-                    if (cells.some((c) => c.length > 0)) {
-                        rows.push(headers.map((_, idx) => cells[idx] ?? ''));
-                    }
-                    j++;
-                }
-                if (rows.length > 0) {
-                    const thead = headers
-                        .map((h) => `<th>${h.replace(/`([^`]+)`/g, '$1')}</th>`)
-                        .join('');
-                    const tbody = rows
-                        .map(
-                            (row) =>
-                                `<tr>${row
-                                    .map((c, ci) => {
-                                        const text = c.replace(/`([^`]+)`/g, '$1');
-                                        return ci === 0
-                                            ? `<td><code>${text}</code></td>`
-                                            : `<td>${text}</td>`;
-                                    })
-                                    .join('')}</tr>`,
-                        )
-                        .join('');
-                    out.push(
-                        `<div class="ai-widget-tool-card"><table><thead><tr>${thead}</tr></thead><tbody>${tbody}</tbody></table></div>`,
-                    );
-                    i = j;
-                    continue;
-                }
-            }
-            out.push(lines[i]);
-            i++;
-        }
-        return out.join('\n');
     }
 
     private typingInterval: number | null = null;

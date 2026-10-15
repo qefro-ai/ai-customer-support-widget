@@ -1,6 +1,6 @@
 {
   "name": "@qefro-ai/widget",
-  "version": "1.2.11",
+  "version": "1.2.12",
   "description": "Embeddable AI chat widget for Qefro customer support",
   "type": "module",
   "files": [
@@ -40,13 +40,16 @@
     "build": "vite build && node scripts/postbuild.mjs",
     "prepublishOnly": "npm run build",
     "preview": "vite preview",
-    "test": "npx --yes tsx --test src/identity.test.ts",
+    "test": "npx --yes tsx --test src/identity.test.ts src/format-content.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "typecheck:test": "tsc --noEmit -p tsconfig.test.json",
     "test:e2e": "playwright test",
     "test:e2e:install": "node scripts/install-obscura.mjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.54.2",
     "@types/dompurify": "^3.0.5",
+    "@types/node": "^26.6.5",
     "terser": "^5.44.1",
     "typescript": "^5.9.3",
     "vite": "^5.4.21"

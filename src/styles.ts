@@ -1346,6 +1346,92 @@ function buildStyles(config: WidgetConfig): string {
       margin-bottom: 6px;
     }
 
+    .ai-widget-summary-kind {
+      font-size: 11px;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--ai-text-secondary);
+      margin-bottom: 4px;
+    }
+
+    .ai-widget-summary-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      font-size: 13px;
+      padding: 4px 0;
+      border-top: 1px solid var(--ai-border);
+    }
+
+    .ai-widget-summary-line span:last-child {
+      color: var(--ai-text);
+      font-weight: 600;
+      text-align: end;
+    }
+
+    .ai-widget-chart-summary {
+      margin: 8px 0 0;
+      padding-left: 18px;
+      color: var(--ai-text);
+      font-size: 13px;
+    }
+
+    .ai-widget-notice {
+      margin-top: 8px;
+      padding: 10px 12px;
+      border-radius: 12px;
+      border: 1px solid var(--ai-border);
+      background: var(--ai-bg-secondary);
+      color: var(--ai-text);
+      font-size: 13px;
+    }
+
+    .ai-widget-notice-error,
+    .ai-widget-notice-partial {
+      background: var(--ai-danger-bg);
+      color: var(--ai-danger-text);
+      border-color: transparent;
+    }
+
+    .ai-widget-form-field {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      margin: 8px 0;
+      font-size: 12.5px;
+      color: var(--ai-text-secondary);
+    }
+
+    .ai-widget-form-field input {
+      border: 1px solid var(--ai-border);
+      border-radius: 8px;
+      padding: 8px 10px;
+      font: inherit;
+      color: var(--ai-text);
+      background: var(--ai-bg);
+    }
+
+    .ai-widget-form-error {
+      min-height: 1em;
+      color: var(--ai-danger-text);
+      font-size: 12px;
+    }
+
+    .ai-widget-action-btn:disabled {
+      opacity: 0.55;
+      cursor: not-allowed;
+    }
+
+    @media (max-width: 480px) {
+      .ai-widget-summary-line {
+        flex-direction: column;
+        gap: 2px;
+      }
+      .ai-widget-tool-card {
+        overflow-x: auto;
+      }
+    }
+
     .ai-widget-handoff-container {
       width: 100%;
     }
